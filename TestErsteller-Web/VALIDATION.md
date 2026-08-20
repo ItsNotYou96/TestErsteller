@@ -11,6 +11,11 @@
 - aktuelle Notion-Struktur Database → Data Source berücksichtigt.
 - DOCX-Mathematik-API gegen die aktuelle `docx`-Dokumentation abgeglichen (Math, Fraction, Radical, Superscript, Subscript, ImageRun).
 - TypeScript-Parserlauf ohne Syntaxfehler in den eigenen Modulen.
+- WPF-Publish extrahiert und das eingebettete Mapping überprüft: 7 Klassen, 20 Themen, 120 Kompetenz-Datenbankzuordnungen.
+- Klassen-/Themen-Metadaten der Webversion gegen die WPF-Logik geprüft.
+- Reihenfolge der sechs Datenbanken gegen die WPF-Enum-Reihenfolge K1–K6 geprüft.
+- Exportreihenfolge wird jetzt explizit aus der vom Benutzer sortierbaren Auswahl übernommen.
+
 
 ## Konkreter Regressionstest
 

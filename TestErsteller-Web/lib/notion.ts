@@ -1,5 +1,6 @@
 import type { Competence, TaskItem } from "./types";
 import { buildPointsByAfb, parsePointsSpec, parseSubTasks } from "./taskParsing";
+import { LEGACY_CLASSES, LEGACY_WPF_DATABASE_MAP } from "./wpfDatabaseMap";
 
 const NOTION_VERSION = "2026-03-11";
 const DEFAULT_DB_ID = "10233652f4bc801bab33d35a61a51f52";
@@ -12,6 +13,8 @@ const COMPETENCES: Competence[] = [
   "Mathematik",
   "Kommunizieren",
 ];
+
+type DbMap = Record<string, Record<string, Partial<Record<Competence, string>>>>;
 
 function normalizeDbId(id?: string) {
   return (id || "").replace(/-/g, "").trim();
@@ -69,9 +72,14 @@ function parseCompetence(raw: string): Competence {
   return "Mathematik";
 }
 
-function parsePage(page: any, forcedCompetence?: Competence): TaskItem {
+function parsePage(
+  page: any,
+  forcedCompetence?: Competence,
+  forcedTopic?: string,
+  forcedClassLevel?: string,
+): TaskItem {
   const props = page.properties || {};
-  const title = plainText(propertyByNames(props, ["Name", "Titel", "Title"])) || "Aufgabe";
+  const title = plainText(propertyByNames(props, ["Titel", "Name", "Title"])) || "Aufgabe";
   const questionText = plainText(propertyByNames(props, ["Aufgabe", "Aufgabentext", "Question"]));
   const afbRaw = plainText(propertyByNames(props, ["Aufgabenbereich", "AFB", "Anforderungsbereich"]));
   const pointsProperty = propertyByNames(props, ["Punkte", "MaxPoints", "Punktzahl"]);
@@ -79,8 +87,8 @@ function parsePage(page: any, forcedCompetence?: Competence): TaskItem {
   const pointSpec = parsePointsSpec(pointsRaw);
   const maxPoints = pointSpec.maxPoints || numberValue(pointsProperty);
   const competenceRaw = plainText(propertyByNames(props, ["Kompetenz", "Prozessbezogene Kompetenz", "Competence"]));
-  const topic = plainText(propertyByNames(props, ["Thema", "Topic"])) || "Allgemein";
-  const classLevel = plainText(propertyByNames(props, ["Klasse", "Jahrgang", "Jahrgangsstufe"]));
+  const topicFromPage = plainText(propertyByNames(props, ["Thema", "Topic"]));
+  const classFromPage = plainText(propertyByNames(props, ["Klasse", "Jahrgang", "Jahrgangsstufe"]));
   const expectation = plainText(propertyByNames(props, ["Erwartungshorizont", "Erwartung", "Expectation"]));
   const estimatedTime = numberValue(propertyByNames(props, ["Zeit", "Bearbeitungszeit", "EstimatedTime", "Minuten"]));
   const imageUrl = filesUrl(propertyByNames(props, ["Bild", "Image", "Grafik"]));
@@ -92,8 +100,8 @@ function parsePage(page: any, forcedCompetence?: Competence): TaskItem {
     title,
     questionText,
     competence: forcedCompetence ?? parseCompetence(competenceRaw),
-    topic,
-    classLevel,
+    topic: (forcedTopic ?? topicFromPage) || "Allgemein",
+    classLevel: forcedClassLevel ?? classFromPage,
     maxPoints,
     pointsRaw,
     afbRaw,
@@ -127,7 +135,8 @@ async function resolveDataSourceIds(databaseOrDataSourceId: string): Promise<str
     if (ids.length) return ids;
   }
 
-  // Allows NOTION_DATABASE_MAP_JSON to contain a data_source_id directly.
+  // Die feste WPF-Zuordnung enthält Database-IDs. Direkte Data-Source-IDs
+  // bleiben für benutzerdefinierte Overrides ebenfalls unterstützt.
   const dsRes = await fetch(`https://api.notion.com/v1/data_sources/${id}`, {
     headers: authHeaders(),
     cache: "no-store",
@@ -136,7 +145,7 @@ async function resolveDataSourceIds(databaseOrDataSourceId: string): Promise<str
 
   const dbText = await dbRes.text().catch(() => "");
   const dsText = await dsRes.text().catch(() => "");
-  throw new Error(`Notion-ID konnte weder als Database noch als Data Source aufgelöst werden. ${dbText || dsText}`);
+  throw new Error(`Notion-ID ${id} konnte weder als Database noch als Data Source aufgelöst werden. ${dbText || dsText}`);
 }
 
 async function queryDataSource(dataSourceId: string): Promise<any[]> {
@@ -166,43 +175,48 @@ async function queryDatabase(databaseOrDataSourceId: string): Promise<any[]> {
   return groups.flat();
 }
 
-function readMap(): Record<string, any> | null {
+function readMap(): { map: DbMap; isOverride: boolean } {
   const raw = process.env.NOTION_DATABASE_MAP_JSON?.trim();
-  if (!raw) return null;
+  if (!raw) return { map: LEGACY_WPF_DATABASE_MAP, isOverride: false };
   try {
-    return JSON.parse(raw);
+    return { map: JSON.parse(raw) as DbMap, isOverride: true };
   } catch {
     throw new Error("NOTION_DATABASE_MAP_JSON ist kein gültiges JSON.");
   }
 }
 
-
-function firstMappedDatabaseId(map: Record<string, any>): string | undefined {
+function firstMappedDatabaseId(map: DbMap): string | undefined {
   for (const classNode of Object.values(map)) {
     if (!classNode || typeof classNode !== "object") continue;
-    for (const topicNode of Object.values(classNode as Record<string, any>)) {
+    for (const topicNode of Object.values(classNode)) {
       if (!topicNode || typeof topicNode !== "object") continue;
-      for (const value of Object.values(topicNode as Record<string, any>)) {
+      for (const competence of COMPETENCES) {
+        const value = topicNode[competence];
         if (typeof value === "string" && value.trim()) return value;
       }
     }
   }
   return undefined;
 }
+
 function databaseIdsFor(classLevel?: string, topic?: string): Array<{ id: string; competence?: Competence }> {
-  const map = readMap();
-  const candidates: Array<{ id: string; competence?: Competence }> = [];
-  if (map && classLevel && topic) {
+  const { map } = readMap();
+
+  if (classLevel && topic) {
     const topicNode = map?.[classLevel]?.[topic];
-    if (topicNode && typeof topicNode === "object") {
-      for (const competence of COMPETENCES) {
-        const id = topicNode[competence];
-        if (typeof id === "string" && id.trim()) candidates.push({ id, competence });
-      }
+    if (!topicNode) {
+      throw new Error(`Für Klasse ${classLevel} und Thema „${topic}“ ist keine Datenbankzuordnung hinterlegt.`);
     }
+
+    return COMPETENCES.map((competence) => {
+      const id = topicNode[competence];
+      if (!id) throw new Error(`Keine Datenbank für Kompetenz ${competence} in Thema „${topic}“ hinterlegt.`);
+      return { id, competence };
+    });
   }
-  if (candidates.length) return candidates;
-  return [{ id: process.env.NOTION_DATABASE_ID?.trim() || DEFAULT_DB_ID }];
+
+  const first = firstMappedDatabaseId(map);
+  return [{ id: first || process.env.NOTION_DATABASE_ID?.trim() || DEFAULT_DB_ID }];
 }
 
 export function notionConfigured() {
@@ -210,34 +224,43 @@ export function notionConfigured() {
 }
 
 export async function loadTasks(classLevel?: string, topic?: string): Promise<TaskItem[]> {
+  if (!classLevel || !topic) {
+    throw new Error("Klasse und Thema müssen ausgewählt sein.");
+  }
+
   const dbs = databaseIdsFor(classLevel, topic);
   const groups = await Promise.all(
-    dbs.map(async ({ id, competence }) => (await queryDatabase(id)).map((page) => parsePage(page, competence)))
+    dbs.map(async ({ id, competence }) => {
+      try {
+        const pages = await queryDatabase(id);
+        return pages.map((page) => parsePage(page, competence, topic, classLevel));
+      } catch (error) {
+        const prefix = competence ? `${competence}: ` : "";
+        throw new Error(`${prefix}${error instanceof Error ? error.message : String(error)}`);
+      }
+    }),
   );
-  const all = groups.flat();
-  return all.filter((task) => {
-    const classOk = !classLevel || !task.classLevel || task.classLevel === classLevel;
-    const topicOk = !topic || task.topic === "Allgemein" || task.topic === topic;
-    return classOk && topicOk;
-  });
+
+  return groups.flat();
 }
 
 export async function loadMeta() {
-  const map = readMap();
-  if (map && Object.keys(map).length) {
-    const classes = Object.keys(map).sort();
-    const topics = Array.from(new Set(classes.flatMap((c) => Object.keys(map[c] || {})))).sort();
-    return { classes, topics };
-  }
-  const tasks = await loadTasks();
-  const classes = Array.from(new Set(tasks.map((t) => t.classLevel).filter(Boolean) as string[])).sort();
-  const topics = Array.from(new Set(tasks.map((t) => t.topic).filter(Boolean))).sort();
-  return { classes, topics };
+  const { map, isOverride } = readMap();
+  const classes = isOverride
+    ? Object.keys(map).sort((a, b) => Number(a) - Number(b) || a.localeCompare(b))
+    : [...LEGACY_CLASSES];
+
+  const topicsByClass = Object.fromEntries(
+    classes.map((classLevel) => [classLevel, Object.keys(map[classLevel] || {})]),
+  ) as Record<string, string[]>;
+
+  const topics = Array.from(new Set(Object.values(topicsByClass).flat()));
+  return { classes, topics, topicsByClass };
 }
 
 export async function testConnection() {
-  const map = readMap();
-  const db = (map && firstMappedDatabaseId(map)) || databaseIdsFor()[0]?.id;
+  const { map } = readMap();
+  const db = firstMappedDatabaseId(map) || databaseIdsFor()[0]?.id;
   const dataSourceIds = await resolveDataSourceIds(db);
   const res = await fetch(`https://api.notion.com/v1/data_sources/${normalizeDbId(dataSourceIds[0])}`, {
     headers: authHeaders(),
@@ -248,4 +271,3 @@ export async function testConnection() {
   const title = titleText(data.title?.[0] ? { title: data.title } : undefined) || data.name || data.id;
   return { ok: true, title, dataSources: dataSourceIds.length };
 }
-

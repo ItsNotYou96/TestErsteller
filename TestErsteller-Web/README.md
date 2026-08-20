@@ -8,13 +8,14 @@ Web-Umsetzung des bekannten Funktionsstands der WPF-App als Next.js-Anwendung.
 - sechs Kompetenzspalten nebeneinander: Argumentieren, Problemlösen, Modellieren, Darstellungen, Mathematik, Kommunizieren
 - Aufgaben als Checkboxen innerhalb der jeweiligen Kompetenzgruppe
 - Laden der Aufgaben aus Notion
-- Unterstützung einer zentralen Notion-Datenbank sowie des alten Mappings „sechs Datenbanken pro Thema“
+- exakte Übernahme des WPF-Mappings: pro Thema sechs getrennte Notion-Datenbanken (K1–K6)
 - Live-Berechnung von Gesamtpunkten und Gesamtzeit
 - AFB-Verteilung für die Pflichtvariante ohne Sternchen-Teilaufgaben
 - zweite AFB-Verteilung für die Sternchen-Variante: Sternchen zuerst, anschließend normale Teilaufgaben in Reihenfolge bis `MaxPoints`
 - Kompetenzverteilung nach Punkten
 - `Test DB`-Verbindungstest
 - `Erstellen`-Dialog mit Testtitel, Hilfsmitteln und Formelpunkten
+- frei änderbare Aufgabenreihenfolge vor dem Export; dieselbe Reihenfolge gilt für Test und Erwartungshorizont
 - Export als ZIP mit Test und Erwartungshorizont im DOCX-Format
 - Bilder aus Notion im Testexport
 - Word-Matheobjekte für typische LaTeX-Formeln, Brüche, Wurzeln, Hoch-/Tiefstellungen
@@ -27,7 +28,7 @@ Die geheime Notion-Integration wird ausschließlich serverseitig über `NOTION_T
 
 1. `.env.local.example` nach `.env.local` kopieren.
 2. Den vorhandenen Notion-Integration-Key der WPF-App als `NOTION_TOKEN` eintragen.
-3. Falls die WPF-App pro Thema sechs getrennte Datenbanken verwendet, `NOTION_DATABASE_MAP_JSON` mit den bisherigen IDs befüllen.
+3. Weitere Datenbankvariablen sind für den normalen Betrieb nicht nötig: Das exakte WPF-Mapping Klasse → Thema → K1–K6 ist bereits im Servercode enthalten. `NOTION_DATABASE_MAP_JSON` dient nur noch als optionaler Override.
 
 Das zentrale Datenbank-Fallback ist bereits auf die bekannte Datenbank-ID gesetzt:
 
@@ -95,8 +96,16 @@ npm start
 
 ## Vercel
 
-Die Variablen `NOTION_TOKEN`, `NOTION_DATABASE_ID` und optional `NOTION_DATABASE_MAP_JSON` als serverseitige Environment Variables im Vercel-Projekt anlegen und anschließend deployen.
+Für den normalen Betrieb reicht `NOTION_TOKEN` als serverseitige Environment Variable im Vercel-Projekt. `NOTION_DATABASE_ID` kann aus Kompatibilitätsgründen gesetzt bleiben; `NOTION_DATABASE_MAP_JSON` ist nur für ein bewusstes Mapping-Override nötig.
 
-## Hinweis zur 1:1-Übernahme
+## Übernommene WPF-Struktur
 
-Die ursprünglichen `.xaml`- und `.cs`-Quelldateien sowie der geheime Notion-Key waren in den verfügbaren Dateien nicht enthalten. Deshalb basiert diese Umsetzung auf dem bekannten Funktionsstand der WPF-App. Die Architektur ist so angelegt, dass die noch fehlenden exakten Database-IDs oder Detailwerte aus dem XAML ohne Umbau nachgetragen werden können.
+Aus der veröffentlichten WPF-App wurde die eingebettete .NET-Assembly ausgelesen. Damit sind nun auch die zuvor fehlenden Details exakt bekannt und im Webprojekt hinterlegt:
+
+- Klassenliste 7–13
+- Themenlisten je Klasse (in der WPF-Version für 7–10 befüllt)
+- 20 Themen insgesamt
+- 120 feste Notion-Datenbankzuordnungen: sechs Kompetenz-Datenbanken je Thema
+- Kompetenzreihenfolge K1 Argumentieren, K2 Problemlösen, K3 Modellieren, K4 Darstellungen, K5 mathematische Werkzeuge/Mathematik, K6 Kommunizieren
+
+Der geheime Notion-Token bleibt weiterhin ausschließlich in Vercel bzw. `.env.local` und ist nicht im Web-Quellcode enthalten.

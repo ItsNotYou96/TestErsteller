@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Database, FileDown, Loader2, RefreshCw } from "lucide-react";
+import { ArrowDown, ArrowUp, CheckCircle2, Database, FileDown, Loader2, RefreshCw } from "lucide-react";
 import type { Afb, Competence, TaskItem, TestMetadata } from "@/lib/types";
 import { sumAfb, totalAfb } from "@/lib/scoring";
 
 const competences: Competence[] = ["Argumentieren", "Problemlösen", "Modellieren", "Darstellungen", "Mathematik", "Kommunizieren"];
 const afbs: Afb[] = ["AFB1", "AFB2", "AFB3"];
-const fallbackClasses = ["7", "8", "9", "10"];
+const fallbackClasses = ["7", "8", "9", "10", "11", "12", "13"];
 const competenceShort: Record<Competence, string> = {
   Argumentieren: "K1",
   "Problemlösen": "K2",
@@ -23,11 +23,11 @@ function percent(part: number, total: number) {
 
 export default function Home() {
   const [classes, setClasses] = useState<string[]>(fallbackClasses);
-  const [topics, setTopics] = useState<string[]>([]);
+  const [topicsByClass, setTopicsByClass] = useState<Record<string, string[]>>({});
   const [classLevel, setClassLevel] = useState("7");
   const [topic, setTopic] = useState("");
   const [tasks, setTasks] = useState<TaskItem[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectedOrder, setSelectedOrder] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("Bereit.");
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -40,6 +40,9 @@ export default function Home() {
     topic: "",
   });
 
+  const topics = topicsByClass[classLevel] || [];
+  const selected = useMemo(() => new Set(selectedOrder), [selectedOrder]);
+
   useEffect(() => {
     fetch("/api/notion?action=meta")
       .then(async (r) => ({ ok: r.ok, data: await r.json() }))
@@ -48,17 +51,29 @@ export default function Home() {
           setMessage(data.error || "Notion ist nicht konfiguriert.");
           return;
         }
-        if (data.classes?.length) {
-          setClasses(data.classes);
-          setClassLevel(data.classes[0]);
-        }
-        if (data.topics?.length) {
-          setTopics(data.topics);
-          setTopic(data.topics[0]);
-        }
+
+        const loadedClasses: string[] = data.classes?.length ? data.classes : fallbackClasses;
+        const loadedTopicsByClass: Record<string, string[]> = data.topicsByClass || {};
+        const firstClass = loadedClasses[0] || "7";
+
+        setClasses(loadedClasses);
+        setTopicsByClass(loadedTopicsByClass);
+        setClassLevel(firstClass);
+        setTopic(loadedTopicsByClass[firstClass]?.[0] || "");
       })
       .catch(() => setMessage("Metadaten konnten nicht geladen werden."));
   }, []);
+
+  useEffect(() => {
+    const classTopics = topicsByClass[classLevel] || [];
+    if (!classTopics.length) {
+      setTopic("");
+      setTasks([]);
+      setSelectedOrder([]);
+      return;
+    }
+    if (!classTopics.includes(topic)) setTopic(classTopics[0]);
+  }, [classLevel, topic, topicsByClass]);
 
   useEffect(() => {
     if (!topic) return;
@@ -70,13 +85,13 @@ export default function Home() {
     if (!topic) return;
     setLoading(true);
     setMessage("Aufgaben werden geladen …");
-    setSelected(new Set());
+    setSelectedOrder([]);
     try {
       const r = await fetch(`/api/notion?action=tasks&class=${encodeURIComponent(classLevel)}&topic=${encodeURIComponent(topic)}`);
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || "Aufgaben konnten nicht geladen werden.");
       setTasks(data.tasks || []);
-      setMessage(`${data.tasks?.length || 0} Aufgaben geladen.`);
+      setMessage(`${data.tasks?.length || 0} Aufgaben aus K1–K6 geladen.`);
     } catch (e) {
       setTasks([]);
       setMessage(e instanceof Error ? e.message : String(e));
@@ -101,14 +116,24 @@ export default function Home() {
   }
 
   function toggle(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+    setSelectedOrder((prev) => prev.includes(id) ? prev.filter((taskId) => taskId !== id) : [...prev, id]);
+  }
+
+  function moveSelectedTask(index: number, direction: -1 | 1) {
+    setSelectedOrder((prev) => {
+      const target = index + direction;
+      if (index < 0 || index >= prev.length || target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[target]] = [next[target], next[index]];
       return next;
     });
   }
 
-  const selectedTasks = useMemo(() => tasks.filter((t) => selected.has(t.id)), [tasks, selected]);
+  const taskById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
+  const selectedTasks = useMemo(
+    () => selectedOrder.map((id) => taskById.get(id)).filter((task): task is TaskItem => Boolean(task)),
+    [selectedOrder, taskById],
+  );
   const groupedTasks = useMemo(
     () => Object.fromEntries(competences.map((c) => [c, tasks.filter((t) => t.competence === c)])) as Record<Competence, TaskItem[]>,
     [tasks],
@@ -172,9 +197,9 @@ export default function Home() {
         </label>
         <label className="topicSelect">
           Thema
-          <select value={topic} onChange={(e) => setTopic(e.target.value)}>
-            <option value="" disabled>Thema wählen</option>
-            {topics.map((t) => <option key={t}>{t}</option>)}
+          <select value={topic} onChange={(e) => setTopic(e.target.value)} disabled={!topics.length}>
+            {!topics.length && <option value="">Keine Themen hinterlegt</option>}
+            {topics.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
         </label>
         <button className="iconButton" onClick={() => void loadTasks()} disabled={!topic || loading} title="Aufgaben neu laden">
@@ -194,7 +219,11 @@ export default function Home() {
           {loading ? (
             <div className="empty"><Loader2 className="spin" size={22} />Aufgaben werden geladen …</div>
           ) : tasks.length === 0 ? (
-            <div className="empty">Keine Aufgaben geladen. Wähle Klasse und Thema oder prüfe die Datenbankverbindung.</div>
+            <div className="empty">
+              {topic
+                ? "Keine Aufgaben geladen. Prüfe die Notion-Freigaben für die sechs Kompetenz-Datenbanken."
+                : "Für diese Klasse sind in der WPF-Version keine Themen hinterlegt."}
+            </div>
           ) : (
             <div className="competenceScroller">
               <div className="competenceGrid">
@@ -210,28 +239,32 @@ export default function Home() {
                     <div className="competenceTasks">
                       {groupedTasks[competence].length === 0 ? (
                         <div className="noGroupTasks">Keine Aufgaben</div>
-                      ) : groupedTasks[competence].map((task) => (
-                        <label
-                          className={`taskChoice ${selected.has(task.id) ? "selected" : ""}`}
-                          key={task.id}
-                          title={task.title}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selected.has(task.id)}
-                            onChange={() => toggle(task.id)}
-                          />
-                          <span className="taskChoiceBody">
-                            <strong>{task.title || "Aufgabe"}</strong>
-                            <span className="taskQuestion">{task.questionText || "Kein Aufgabentext hinterlegt."}</span>
-                            <span className="taskFacts">
-                              <span>{task.pointsRaw || `${task.maxPoints}`} P</span>
-                              {task.estimatedTime > 0 && <span>{task.estimatedTime} min</span>}
-                              {task.imageUrl && <span>Bild</span>}
+                      ) : groupedTasks[competence].map((task) => {
+                        const orderIndex = selectedOrder.indexOf(task.id);
+                        return (
+                          <label
+                            className={`taskChoice ${selected.has(task.id) ? "selected" : ""}`}
+                            key={task.id}
+                            title={task.title}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selected.has(task.id)}
+                              onChange={() => toggle(task.id)}
+                            />
+                            <span className="taskChoiceBody">
+                              <strong>{task.title || "Aufgabe"}</strong>
+                              <span className="taskQuestion">{task.questionText || "Kein Aufgabentext hinterlegt."}</span>
+                              <span className="taskFacts">
+                                {orderIndex >= 0 && <span>Nr. {orderIndex + 1}</span>}
+                                <span>{task.pointsRaw || `${task.maxPoints}`} P</span>
+                                {task.estimatedTime > 0 && <span>{task.estimatedTime} min</span>}
+                                {task.imageUrl && <span>Bild</span>}
+                              </span>
                             </span>
-                          </span>
-                        </label>
-                      ))}
+                          </label>
+                        );
+                      })}
                     </div>
                   </section>
                 ))}
@@ -285,7 +318,7 @@ export default function Home() {
 
       {showDialog && (
         <div className="overlay" onMouseDown={() => setShowDialog(false)}>
-          <div className="dialog" onMouseDown={(e) => e.stopPropagation()}>
+          <div className="dialog exportDialog" onMouseDown={(e) => e.stopPropagation()}>
             <div className="dialogHead">
               <div><div className="eyebrow">EXPORT</div><h2>Testeigenschaften</h2></div>
               <CheckCircle2 />
@@ -293,6 +326,49 @@ export default function Home() {
             <label>Titel<input value={meta.title} onChange={(e) => setMeta({ ...meta, title: e.target.value })} /></label>
             <label>Hilfsmittel<input value={meta.tools} onChange={(e) => setMeta({ ...meta, tools: e.target.value })} placeholder="z. B. Taschenrechner, Formelsammlung" /></label>
             <label>Formelpunkte<input value={meta.formPoints} onChange={(e) => setMeta({ ...meta, formPoints: e.target.value })} placeholder="optional" /></label>
+
+            <section className="orderSection">
+              <div className="orderSectionHead">
+                <div>
+                  <strong>Reihenfolge der Aufgaben</strong>
+                  <span>Mit den Pfeilen die Reihenfolge im Test und im Erwartungshorizont ändern.</span>
+                </div>
+              </div>
+              <div className="orderList">
+                {selectedTasks.map((task, index) => (
+                  <div className="orderItem" key={task.id}>
+                    <span className="orderNumber">{index + 1}</span>
+                    <div className="orderText">
+                      <strong>{task.title || "Aufgabe"}</strong>
+                      <span>{competenceShort[task.competence]} {task.competence} · {task.maxPoints} P</span>
+                    </div>
+                    <div className="orderControls">
+                      <button
+                        type="button"
+                        className="orderButton"
+                        onClick={() => moveSelectedTask(index, -1)}
+                        disabled={index === 0}
+                        title="Nach oben"
+                        aria-label={`${task.title} nach oben`}
+                      >
+                        <ArrowUp size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        className="orderButton"
+                        onClick={() => moveSelectedTask(index, 1)}
+                        disabled={index === selectedTasks.length - 1}
+                        title="Nach unten"
+                        aria-label={`${task.title} nach unten`}
+                      >
+                        <ArrowDown size={15} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
             <div className="dialogStats">{selected.size} Aufgaben · {totalPoints} Punkte · {totalTime} Minuten</div>
             <div className="dialogActions">
               <button className="secondary" onClick={() => setShowDialog(false)}>Abbrechen</button>
