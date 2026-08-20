@@ -289,8 +289,9 @@ export async function POST(request: Request) {
     zip.file(`${safe}.docx`, test);
     zip.file(`${safe}-Erwartungshorizont.docx`, expectation);
     const out = await zip.generateAsync({ type: "uint8array" });
-
-    return new NextResponse(out, {
+    const body = Uint8Array.from(out).buffer;
+    
+    return new NextResponse(body, {
       headers: {
         "Content-Type": "application/zip",
         "Content-Disposition": `attachment; filename="${encodeURIComponent(safe)}.zip"`,
