@@ -187,7 +187,7 @@ export default function AdminPage() {
         </div>
         <div className="adminHeaderActions">
           <span className={`adminCapability ${status.notionConfigured ? "ok" : "bad"}`}>Notion {status.notionConfigured ? "bereit" : "fehlt"}</span>
-          <span className={`adminCapability ${status.llmConfigured ? "ok" : "neutral"}`}>{status.llmConfigured ? `KI: ${status.llmModel}` : "KI optional"}</span>
+          <span className={`adminCapability ${status.llmConfigured ? "ok" : "neutral"}`}>{status.llmConfigured ? `KI (Groq): ${status.llmModel}` : "KI optional"}</span>
           <button className="secondary" onClick={() => void logout()}><LogOut size={16} />Abmelden</button>
         </div>
       </header>
@@ -204,7 +204,7 @@ export default function AdminPage() {
           <div className="adminContextFields">
             <label>Klasse als Vorgabe<select value={defaultClass} onChange={(e) => setDefaultClass(e.target.value)}><option value="">Automatisch erkennen</option>{LEGACY_CLASSES.filter((x) => Number(x) <= 10).map((x) => <option key={x}>{x}</option>)}</select></label>
             <label>Thema als Vorgabe<select value={defaultTopic} onChange={(e) => setDefaultTopic(e.target.value)}><option value="">Automatisch erkennen</option>{(LEGACY_TOPICS_BY_CLASS[defaultClass] || []).map((x) => <option key={x}>{x}</option>)}</select></label>
-            <label className="adminLlmToggle"><input type="checkbox" checked={useLlm} onChange={(e) => setUseLlm(e.target.checked)} disabled={!status.llmConfigured} /><span><b>KI-Analyse verwenden</b><small>{status.llmConfigured ? "Empfohlen für Kompetenz, AFB, Zeit und Erwartungshorizont. Dabei wird der Dokumentinhalt an die konfigurierte OpenAI-API gesendet." : "OPENAI_API_KEY nicht gesetzt – heuristische Analyse bleibt verfügbar."}</small></span><Bot size={18} /></label>
+            <label className="adminLlmToggle"><input type="checkbox" checked={useLlm} onChange={(e) => setUseLlm(e.target.checked)} disabled={!status.llmConfigured} /><span><b>KI-Analyse verwenden</b><small>{status.llmConfigured ? "Empfohlen für Kompetenz, AFB, Zeit und Erwartungshorizont. Dabei wird der extrahierte Dokumenttext an Groq gesendet." : "GROQ_API_KEY nicht gesetzt – heuristische Analyse bleibt verfügbar."}</small></span><Bot size={18} /></label>
             <button className="primary adminAnalyzeButton" disabled={busy || !files.length} onClick={() => void analyze()}>{busy ? <Loader2 className="spin" size={17} /> : <FileSearch size={17} />}Aufgaben erkennen</button>
           </div>
         </div>

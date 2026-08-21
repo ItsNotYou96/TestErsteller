@@ -8,11 +8,11 @@ import { parsePointsSpec } from "./taskParsing";
 const COMPETENCES: Competence[] = ["Argumentieren", "Problemlösen", "Modellieren", "Darstellungen", "Mathematik", "Kommunizieren"];
 
 export function llmConfigured() {
-  return Boolean(process.env.OPENAI_API_KEY?.trim());
+  return Boolean(process.env.GROQ_API_KEY?.trim());
 }
 
 export function llmModel() {
-  return process.env.OPENAI_MODEL?.trim() || "gpt-5.6-luna";
+  return process.env.GROQ_MODEL?.trim() || "openai/gpt-oss-120b";
 }
 
 function outputText(data: any) {
@@ -96,20 +96,14 @@ ${sourceText}`;
 }
 
 export async function analyzeWithLlm(sources: ParsedSource[], heuristics: ImportDraft[], defaultClass?: string, defaultTopic?: string): Promise<ImportDraft[]> {
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) return heuristics;
 
+  // GPT-OSS 120B on Groq is text-in/text-out. PDF/DOCX text is therefore
+  // extracted server-side first and only that extracted text is sent to Groq.
   const content: any[] = [{ type: "input_text", text: prompt(sources, heuristics, defaultClass, defaultTopic) }];
-  // If a PDF is scanned or its extracted text is sparse, add the original PDF as a file input so the model can inspect it visually.
-  for (const source of sources.filter((x) => x.mimeType === "application/pdf" && (x.text || "").trim().length < 1200 && x.bytes.length <= 8 * 1024 * 1024)) {
-    content.push({
-      type: "input_file",
-      filename: source.name,
-      file_data: source.bytes.toString("base64"),
-    });
-  }
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const response = await fetch("https://api.groq.com/openai/v1/responses", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -117,15 +111,14 @@ export async function analyzeWithLlm(sources: ParsedSource[], heuristics: Import
       input: [{ role: "user", content }],
       text: { format: { type: "json_schema", name: "math_task_import", strict: true, schema } },
       max_output_tokens: 14000,
-      store: false,
     }),
     cache: "no-store",
   });
 
-  if (!response.ok) throw new Error(`LLM-Analyse fehlgeschlagen (${response.status}): ${await response.text()}`);
+  if (!response.ok) throw new Error(`Groq-Analyse fehlgeschlagen (${response.status}): ${await response.text()}`);
   const data = await response.json();
   const text = outputText(data);
-  if (!text) throw new Error("LLM-Analyse hat keine strukturierte Ausgabe geliefert.");
+  if (!text) throw new Error("Groq-Analyse hat keine strukturierte Ausgabe geliefert.");
   const parsed = JSON.parse(text) as { tasks: any[] };
 
   return (parsed.tasks || []).map((task, index) => {

@@ -27,7 +27,9 @@ export async function POST(request: NextRequest) {
     const warnings: string[] = [];
 
     if (useLlm) {
-      if (!llmConfigured()) warnings.push("KI-Analyse wurde angefordert, aber OPENAI_API_KEY ist nicht gesetzt. Heuristische Analyse verwendet.");
+      const sparsePdf = sources.some((source) => source.mimeType === "application/pdf" && (source.text || "").trim().length < 400);
+      if (sparsePdf) warnings.push("Mindestens eine PDF enthält kaum auslesbaren Text. Groq GPT-OSS 120B verarbeitet hier nur den extrahierten Text; reine Scan-PDFs benötigen später eine OCR-/Vision-Erweiterung.");
+      if (!llmConfigured()) warnings.push("KI-Analyse wurde angefordert, aber GROQ_API_KEY ist nicht gesetzt. Heuristische Analyse verwendet.");
       else {
         try { drafts = await analyzeWithLlm(sources, drafts, classLevel, topic); }
         catch (error) { warnings.push(`KI-Analyse ist fehlgeschlagen; heuristische Ergebnisse werden gezeigt. ${error instanceof Error ? error.message : String(error)}`); }
@@ -37,7 +39,7 @@ export async function POST(request: NextRequest) {
     if (!drafts.length) {
       return NextResponse.json({
         error: useLlm
-          ? "Es konnten keine Aufgaben erkannt werden. Bei gescannten PDFs prüfe bitte den KI-Schlüssel oder lade eine DOCX/Text-PDF hoch."
+          ? "Es konnten keine Aufgaben erkannt werden. Bei gescannten PDFs lade bitte eine DOCX/Text-PDF hoch; Groq GPT-OSS 120B verarbeitet in dieser Version nur extrahierten Text."
           : "Es konnten keine Aufgabenüberschriften erkannt werden. Verwende z. B. „Aufgabe 1:“ oder aktiviere die KI-Analyse.",
       }, { status: 422 });
     }
