@@ -4,6 +4,8 @@ import {
   AlignmentType,
   BorderStyle,
   Document,
+  Header,
+  HeightRule,
   ImageRun,
   Math as WordMath,
   MathFraction,
@@ -15,8 +17,11 @@ import {
   Paragraph,
   Table,
   TableCell,
+  TableLayoutType,
   TableRow,
   TextRun,
+  UnderlineType,
+  VerticalAlign,
   WidthType,
 } from "docx";
 import type { TaskItem, TestMetadata } from "@/lib/types";
@@ -161,33 +166,36 @@ function inlineChildrenWithMath(text: string, italics = false): any[] {
   let last = 0;
   let match: RegExpExecArray | null;
   while ((match = delimiter.exec(text)) !== null) {
-    if (match.index > last) children.push(new TextRun({ text: text.slice(last, match.index), italics, font: "Verdana", size: 20 }));
+    if (match.index > last) children.push(new TextRun({ text: text.slice(last, match.index), italics, font: "Aptos", size: 22 }));
     children.push(wordMath(match[0]));
     last = match.index + match[0].length;
   }
-  if (last < text.length) children.push(new TextRun({ text: text.slice(last), italics, font: "Verdana", size: 20 }));
+  if (last < text.length) children.push(new TextRun({ text: text.slice(last), italics, font: "Aptos", size: 22 }));
   if (children.length) return children;
 
   const standalone = /(\\frac\{[^}]+\}\{[^}]+\}|\\sqrt\{[^}]+\}|\\[A-Za-z]+|\b(?:\d+)?[A-Za-z]\^\{?[-+A-Za-z0-9]+\}?)/g;
   last = 0;
   while ((match = standalone.exec(text)) !== null) {
-    if (match.index > last) children.push(new TextRun({ text: text.slice(last, match.index), italics, font: "Verdana", size: 20 }));
+    if (match.index > last) children.push(new TextRun({ text: text.slice(last, match.index), italics, font: "Aptos", size: 22 }));
     children.push(wordMath(match[0]));
     last = match.index + match[0].length;
   }
-  if (last < text.length) children.push(new TextRun({ text: text.slice(last), italics, font: "Verdana", size: 20 }));
-  return children.length ? children : [new TextRun({ text, italics, font: "Verdana", size: 20 })];
+  if (last < text.length) children.push(new TextRun({ text: text.slice(last), italics, font: "Aptos", size: 22 }));
+  return children.length ? children : [new TextRun({ text, italics, font: "Aptos", size: 22 })];
 }
 
 function questionParagraphs(text: string) {
   return textLines(text).map((line) => new Paragraph({
     children: inlineChildrenWithMath(line),
-    spacing: { after: 70, line: 280 },
+    spacing: { before: 0, after: 0 },
   }));
 }
 
 function mathParagraphs(text: string) {
-  return textLines(text || "–").map((line) => new Paragraph({ children: inlineChildrenWithMath(line), spacing: { after: 50 } }));
+  return textLines(text || "–").map((line) => new Paragraph({
+    children: inlineChildrenWithMath(line),
+    spacing: { before: 0, after: 100 },
+  }));
 }
 
 async function legacyAsset(name: string) {
@@ -225,12 +233,7 @@ function imageDimensions(data: Uint8Array, type: "png" | "jpg") {
   return { width: 640, height: 360 };
 }
 
-function boundedImageSize(width: number, height: number, maxWidth = 520, maxHeight = 300) {
-  if (!width || !height) return { width: maxWidth, height: Math.round(maxWidth * 0.6) };
-  const scale = Math.min(maxWidth / width, maxHeight / height, 1);
-  return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
-}
-
+/** The WPF generator inserted task images at their original pixel dimensions. */
 async function imageParagraph(url?: string) {
   if (!url) return null;
   try {
@@ -240,201 +243,349 @@ async function imageParagraph(url?: string) {
     const type = imageKind(data, res.headers.get("content-type") || "");
     if (!type) return null;
     const raw = imageDimensions(data, type);
-    const transformation = boundedImageSize(raw.width, raw.height);
     return new Paragraph({
-      children: [new ImageRun({ data, transformation, type })],
-      alignment: AlignmentType.CENTER,
-      spacing: { before: 80, after: 140 },
+      children: [new ImageRun({ data, transformation: { width: raw.width, height: raw.height }, type })],
+      alignment: AlignmentType.LEFT,
+      spacing: { before: 0, after: 0 },
     });
   } catch {
     return null;
   }
 }
 
-function textCell(text: string, bold = false, size = 20) {
+function aptosRun(text: string, options: { bold?: boolean; italics?: boolean; underline?: boolean; size?: number } = {}) {
+  return new TextRun({
+    text,
+    font: "Aptos",
+    size: options.size ?? 22,
+    bold: options.bold,
+    italics: options.italics,
+    underline: options.underline ? { type: UnderlineType.SINGLE } : undefined,
+  });
+}
+
+function verdanaRun(text: string, size = 16) {
+  return new TextRun({ text, font: "Verdana", size });
+}
+
+function blankParagraph() {
+  return new Paragraph({ children: [aptosRun("")] });
+}
+
+function studentCell(runs: TextRun[]) {
   return new TableCell({
-    children: [new Paragraph({ children: [new TextRun({ text, bold, font: "Verdana", size })], spacing: { before: 40, after: 40 } })],
+    children: [new Paragraph({ children: runs, spacing: { before: 0, after: 0 } })],
   });
 }
 
-async function schoolHeader(metadata: TestMetadata) {
+function scoreCell(label: string, points: number | string) {
+  return studentCell([
+    aptosRun(` ${label}: `, { size: 20 }),
+    aptosRun("     ", { underline: true, size: 20 }),
+    aptosRun(` ______/ ${points} BE`, { size: 20 }),
+  ]);
+}
+
+function underlinedLabelCell(label: string, tail = "") {
+  return studentCell([
+    aptosRun(` ${label}: `, { size: 20 }),
+    aptosRun("           ", { underline: true, size: 20 }),
+    ...(tail ? [aptosRun(tail, { size: 20 })] : []),
+  ]);
+}
+
+function parseFormPointSplit(metadata: TestMetadata) {
+  const total = formPointsNumber(metadata);
+  if (total <= 0) return { total: 0, language: 0, handwriting: 0, mathForm: 0 };
+  const language = Math.min(1, total);
+  const handwriting = Math.min(1, Math.max(0, total - language));
+  const mathForm = Math.max(0, total - language - handwriting);
+  return { total, language, handwriting, mathForm };
+}
+
+async function legacyHeader(metadata: TestMetadata) {
   const logo = await legacyAsset("fro_icon.png");
-  const leftChildren: Paragraph[] = [];
-  if (logo) {
-    leftChildren.push(new Paragraph({
-      children: [new ImageRun({ data: logo, transformation: { width: 132, height: 29 }, type: "png" })],
-      spacing: { after: 50 },
-    }));
+  const left = new TableCell({
+    width: { size: 32, type: WidthType.PERCENTAGE },
+    children: [
+      new Paragraph({ children: [verdanaRun("Fritz-Reuter-Oberschule")], spacing: { before: 0, after: 0, line: 200 } }),
+      new Paragraph({ children: [verdanaRun(metadata.classLevel || "")], spacing: { before: 0, after: 0, line: 200 } }),
+      new Paragraph({ children: [verdanaRun(metadata.teacher?.trim() || "Lehrkraft")], spacing: { before: 0, after: 0, line: 200 } }),
+    ],
+  });
+  const center = new TableCell({
+    width: { size: 46, type: WidthType.PERCENTAGE },
+    children: [
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children: [aptosRun(metadata.title || "Klassenarbeit", { bold: true, size: 28 })],
+        spacing: { before: 0, after: 20 },
+      }),
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children: [aptosRun(metadata.topic || "", { size: 18 })],
+        spacing: { before: 0, after: 0 },
+      }),
+    ],
+  });
+  const logoCell = new TableCell({
+    width: { size: 6, type: WidthType.PERCENTAGE },
+    verticalAlign: VerticalAlign.CENTER,
+    children: [new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: logo ? [new ImageRun({ data: logo, transformation: { width: 132, height: 29 }, type: "png" })] : [],
+      spacing: { before: 0, after: 0 },
+    })],
+  });
+  const date = new TableCell({
+    width: { size: 24, type: WidthType.PERCENTAGE },
+    verticalAlign: VerticalAlign.CENTER,
+    children: [new Paragraph({
+      alignment: AlignmentType.RIGHT,
+      children: [verdanaRun(formatDate(metadata.date) || "")],
+      spacing: { before: 0, after: 0 },
+    })],
+  });
+
+  return new Header({
+    children: [new Table({
+      width: { size: 99.6, type: WidthType.PERCENTAGE },
+      layout: TableLayoutType.AUTOFIT,
+      borders: {
+        top: { style: BorderStyle.SINGLE, size: 8 },
+        bottom: { style: BorderStyle.SINGLE, size: 8 },
+        left: { style: BorderStyle.SINGLE, size: 8 },
+        right: { style: BorderStyle.SINGLE, size: 8 },
+        insideHorizontal: { style: BorderStyle.NONE, size: 0 },
+        insideVertical: { style: BorderStyle.NONE, size: 0 },
+      },
+      margins: { top: 100, bottom: 100, left: 150, right: 150 },
+      rows: [new TableRow({ children: [left, center, logoCell, date] })],
+    })],
+  });
+}
+
+function studentOverview(tasks: TaskItem[], metadata: TestMetadata) {
+  const rows: TableRow[] = [
+    new TableRow({ children: [
+      underlinedLabelCell("Vorname"),
+      underlinedLabelCell("Name"),
+      studentCell([
+        aptosRun(` Hilfsmittel: ${metadata.tools?.trim() || "/"}`, { size: 20 }),
+        aptosRun("           ", { underline: true, size: 20 }),
+      ]),
+    ] }),
+  ];
+
+  for (let i = 0; i < tasks.length; i += 3) {
+    const cells: TableCell[] = [];
+    for (let j = 0; j < 3; j++) {
+      const task = tasks[i + j];
+      cells.push(task ? scoreCell(`Aufgabe ${i + j + 1}`, task.maxPoints) : studentCell([aptosRun("", { size: 20 })]));
+    }
+    rows.push(new TableRow({ children: cells }));
   }
-  leftChildren.push(new Paragraph({ children: [new TextRun({ text: "Fritz-Reuter-Oberschule", bold: true, font: "Verdana", size: 20 })] }));
 
-  return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    borders: allBorders,
-    rows: [
-      new TableRow({ children: [
-        new TableCell({ children: leftChildren }),
-        textCell(`Lehrkraft\n${metadata.teacher || "________________"}`),
-        textCell(`Datum\n${formatDate(metadata.date) || "________________"}`),
-      ] }),
-    ],
-  });
-}
+  const form = parseFormPointSplit(metadata);
+  if (form.total > 0) {
+    rows.push(new TableRow({ children: [
+      underlinedLabelCell("Sprache", `_____/ ${form.language} BE`),
+      underlinedLabelCell("Schriftbild", `_____/ ${form.handwriting} BE`),
+      underlinedLabelCell("Mathematische Form", `_____/ ${form.mathForm} BE`),
+    ] }));
+  }
 
-function studentHeader(metadata: TestMetadata) {
-  return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    borders: allBorders,
-    rows: [
-      new TableRow({ children: [
-        textCell(" Vorname: __________________________________"),
-        textCell(" Name: __________________________________"),
-      ] }),
-      new TableRow({ children: [
-        textCell(` Klasse: ${metadata.classLevel || "________"}`),
-        textCell(` Thema: ${metadata.topic || "________"}`),
-      ] }),
-      new TableRow({ children: [
-        new TableCell({ columnSpan: 2, children: [new Paragraph({ children: [new TextRun({ text: ` Hilfsmittel: ${metadata.tools || "keine"}`, font: "Verdana", size: 20 })], spacing: { before: 50, after: 50 } })] }),
-      ] }),
-    ],
-  });
-}
-
-async function hintBlock() {
-  const extra = await legacyAsset("pictogramm_extrablatt.png");
-  const sheet = await legacyAsset("piktogramm_aufgabenblatt.png");
-  const rows: TableRow[] = [];
-  const makeIconCell = (data: Uint8Array | null, width: number, height: number) => new TableCell({
-    children: [new Paragraph({ alignment: AlignmentType.CENTER, children: data ? [new ImageRun({ data, transformation: { width, height }, type: "png" })] : [] })],
-  });
   rows.push(new TableRow({ children: [
-    makeIconCell(extra, 24, 24),
-    textCell("Aufgaben mit diesem Symbol müssen auf einem Extrablatt erledigt werden.", false, 18),
+    studentCell([
+      aptosRun(` Punktzahl: ______/${totalPoints(tasks, metadata)} BE`, { size: 20 }),
+      aptosRun("           ", { underline: true, size: 20 }),
+    ]),
+    underlinedLabelCell("Notenpunkte"),
+    underlinedLabelCell("Note"),
   ] }));
-  rows.push(new TableRow({ children: [
-    makeIconCell(sheet, 22, 22),
-    textCell("Aufgaben mit diesem Symbol sollen auf dem Aufgabenblatt erledigt werden.", false, 18),
-  ] }));
-  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: allBorders, rows });
-}
 
-async function taskHeading(index: number, task: TaskItem) {
-  const icon = await legacyAsset(task.onExtraSheet ? "pictogramm_extrablatt.png" : "piktogramm_aufgabenblatt.png");
-  const children: any[] = [new TextRun({ text: `Aufgabe ${index + 1} (${task.maxPoints} P.)`, bold: true, font: "Verdana", size: 22 })];
-  if (icon) children.push(new TextRun({ text: "     ", font: "Verdana", size: 20 }), new ImageRun({ data: icon, transformation: { width: 20, height: 20 }, type: "png" }));
-  return new Paragraph({ children, spacing: { before: 210, after: 100 } });
-}
-
-function evaluationBlock(tasks: TaskItem[], metadata: TestMetadata) {
-  const contentTotal = tasks.reduce((sum, task) => sum + task.maxPoints, 0);
-  const formPoints = formPointsNumber(metadata);
-  const overall = totalPoints(tasks, metadata);
   return new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
+    layout: TableLayoutType.AUTOFIT,
     borders: allBorders,
-    rows: [
-      new TableRow({ children: [textCell(" Sprache: ______________________________"), textCell(" Schriftbild: ______________________________")] }),
-      new TableRow({ children: [
-        textCell(` Mathematische Form: ______/${formPoints || "____"}`),
-        textCell(` Punktzahl: ______/${overall}${formPoints ? ` (${contentTotal} + ${formPoints})` : ""}`),
-      ] }),
-      new TableRow({ children: [textCell(" Notenpunkte: ______"), textCell(" Note: ______")] }),
-    ],
+    margins: { top: 40, bottom: 40, left: 120, right: 120 },
+    rows,
+  });
+}
+
+function mirrorCell(text: string, bold = false) {
+  return new TableCell({
+    width: { size: 725, type: WidthType.DXA },
+    verticalAlign: VerticalAlign.CENTER,
+    children: [new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [aptosRun(text, { bold, size: 22 })],
+      spacing: { before: 0, after: 0 },
+    })],
   });
 }
 
 function notenspiegel() {
-  const noteCells = ["Note", "1", "2", "3", "4", "5", "6"].map((x) => textCell(x, x === "Note", 18));
-  const countCells = ["Anzahl", "", "", "", "", "", ""].map((x, i) => textCell(x, i === 0, 18));
-  return new Table({ width: { size: 5100, type: WidthType.DXA }, borders: allBorders, rows: [
-    new TableRow({ children: noteCells }),
-    new TableRow({ children: countCells }),
-  ] });
-}
-
-function gradeTable(total: number) {
+  const thick = { style: BorderStyle.SINGLE, size: 8, color: "000000" } as const;
+  const borders = { top: thick, bottom: thick, left: thick, right: thick, insideHorizontal: thick, insideVertical: thick };
   return new Table({
-    width: { size: 5000, type: WidthType.DXA },
-    borders: allBorders,
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    layout: TableLayoutType.AUTOFIT,
+    columnWidths: [650, 725, 725, 725, 725, 725, 725],
+    borders,
     rows: [
-      new TableRow({ children: [textCell("Prozent", true, 18), textCell("Notenpunkte", true, 18), textCell("Punkte ab", true, 18)] }),
-      ...[...gradeThresholds].reverse().map(([percent, np]) => new TableRow({ children: [
-        textCell(`${percent}%`, false, 18),
-        textCell(String(np), false, 18),
-        textCell(String(Math.ceil(total * percent / 100)), false, 18),
-      ] })),
+      new TableRow({ height: { value: 300, rule: HeightRule.EXACT }, children: [
+        mirrorCell("Note", true), mirrorCell("1"), mirrorCell("2"), mirrorCell("3"), mirrorCell("4"), mirrorCell("5"), mirrorCell("6"),
+      ] }),
+      new TableRow({ height: { value: 300, rule: HeightRule.EXACT }, children: [
+        mirrorCell("Anzahl", true), mirrorCell(""), mirrorCell(""), mirrorCell(""), mirrorCell(""), mirrorCell(""), mirrorCell(""),
+      ] }),
     ],
   });
 }
 
+async function hintParagraphs() {
+  const extra = await legacyAsset("pictogramm_extrablatt.png");
+  const sheet = await legacyAsset("piktogramm_aufgabenblatt.png");
+  return [
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [aptosRun("Hinweise", { italics: true })],
+    }),
+    new Paragraph({
+      alignment: AlignmentType.LEFT,
+      children: [
+        ...(extra ? [new ImageRun({ data: extra, transformation: { width: 30, height: 30 }, type: "png" })] : []),
+        aptosRun(" "),
+        aptosRun("Aufgaben mit diesem Symbol müssen auf einem Extrablatt erledigt werden."),
+      ],
+    }),
+    new Paragraph({
+      alignment: AlignmentType.LEFT,
+      children: [
+        ...(sheet ? [new ImageRun({ data: sheet, transformation: { width: 29, height: 30 }, type: "png" })] : []),
+        aptosRun(" "),
+        aptosRun("Aufgaben mit diesem Symbol sollen auf dem Aufgabenblatt erledigt werden."),
+      ],
+    }),
+    blankParagraph(),
+    new Paragraph({
+      border: { top: { style: BorderStyle.SINGLE, size: 8, color: "000000" } },
+      children: [],
+    }),
+  ];
+}
+
+function pointsHeading(task: TaskItem) {
+  const raw = (task.pointsRaw || "").trim();
+  return raw || String(task.maxPoints);
+}
+
+async function taskHeading(index: number, task: TaskItem) {
+  const icon = await legacyAsset(task.onExtraSheet ? "pictogramm_extrablatt.png" : "piktogramm_aufgabenblatt.png");
+  const children: any[] = [aptosRun(`Aufgabe ${index + 1}: ${task.title || "Aufgabe"} (${pointsHeading(task)} P.)`, { bold: true })];
+  if (icon) {
+    children.push(
+      aptosRun(" "),
+      new ImageRun({
+        data: icon,
+        transformation: task.onExtraSheet ? { width: 21, height: 22 } : { width: 21, height: 22 },
+        type: "png",
+      }),
+    );
+  }
+  return new Paragraph({ children, spacing: { before: 0, after: 0 } });
+}
+
 async function createTest(tasks: TaskItem[], metadata: TestMetadata) {
-  const children: any[] = [];
-  children.push(await schoolHeader(metadata));
+  const children: any[] = [blankParagraph(), studentOverview(tasks, metadata), blankParagraph()];
+
   children.push(new Paragraph({
     alignment: AlignmentType.CENTER,
-    children: [new TextRun({ text: metadata.title || "Klassenarbeit", bold: true, font: "Verdana", size: 30 })],
-    spacing: { before: 180, after: 100 },
+    children: [aptosRun("Notenspiegel", { italics: true })],
   }));
-  children.push(studentHeader(metadata));
-  children.push(new Paragraph({ children: [new TextRun({ text: "Hinweise", bold: true, font: "Verdana", size: 20 })], spacing: { before: 150, after: 60 } }));
-  children.push(await hintBlock());
+  children.push(notenspiegel(), blankParagraph());
+  children.push(...await hintParagraphs());
 
   for (let i = 0; i < tasks.length; i++) {
     const task = tasks[i];
     children.push(await taskHeading(i, task));
     children.push(...questionParagraphs(task.questionText));
+    children.push(blankParagraph());
     const image = await imageParagraph(task.imageUrl);
     if (image) children.push(image);
-    children.push(new Paragraph({
-      alignment: AlignmentType.RIGHT,
-      children: [new TextRun({ text: ` ______/ ${task.maxPoints} P.`, font: "Verdana", size: 18 })],
-      spacing: { before: 60, after: 100 },
-    }));
   }
 
-  children.push(new Paragraph({ children: [new TextRun({ text: "Bewertung", bold: true, font: "Verdana", size: 22 })], spacing: { before: 240, after: 70 } }));
-  children.push(evaluationBlock(tasks, metadata));
-  children.push(new Paragraph({ children: [new TextRun({ text: "Notenspiegel", bold: true, font: "Verdana", size: 20 })], spacing: { before: 180, after: 60 } }));
-  children.push(notenspiegel());
-
+  const header = await legacyHeader(metadata);
   return Packer.toBuffer(new Document({
-    styles: { default: { document: { run: { font: "Verdana", size: 20 } } } },
-    sections: [{ properties: { page: { margin: { top: 850, right: 850, bottom: 850, left: 850 } } }, children }],
+    styles: { default: { document: { run: { font: "Aptos", size: 22 } } } },
+    sections: [{
+      properties: {
+        page: { margin: { top: 1440, right: 1440, bottom: 1440, left: 1440, header: 720, footer: 720 } },
+      },
+      headers: { default: header },
+      children,
+    }],
   }));
+}
+
+function expectationCell(text: string, bold = false) {
+  return new TableCell({
+    children: [new Paragraph({
+      children: [aptosRun(text, { bold })],
+      spacing: { before: 0, after: 0 },
+    })],
+  });
+}
+
+function horizontalGradeTable(total: number) {
+  const firstRow = [expectationCell("Prozent"), ...gradeThresholds.map(([percent]) => expectationCell(`${percent}%`))];
+  const secondRow = [expectationCell("Notenpunkte"), ...gradeThresholds.map(([, np]) => expectationCell(String(np)))];
+  const thirdRow = [expectationCell("Punkte ab"), ...gradeThresholds.map(([percent]) => expectationCell(String(Math.ceil(total * percent / 100))))];
+  return new Table({
+    layout: TableLayoutType.AUTOFIT,
+    borders: allBorders,
+    rows: [
+      new TableRow({ children: firstRow }),
+      new TableRow({ children: secondRow }),
+      new TableRow({ children: thirdRow }),
+    ],
+  });
 }
 
 async function createExpectation(tasks: TaskItem[], metadata: TestMetadata) {
   const rows: TableRow[] = [new TableRow({ children: [
-    textCell("Aufgabe", true, 18),
-    textCell("Erwartungshorizont", true, 18),
-    textCell("AFB", true, 18),
-    textCell("Punkte", true, 18),
+    expectationCell("Aufgabe"),
+    expectationCell("Erwartungshorizont"),
+    expectationCell("Punkte"),
   ] })];
 
-  tasks.forEach((task, index) => {
-    const afb = task.afbRaw || Object.entries(task.pointsByAfb).filter(([, points]) => (points || 0) > 0).map(([key]) => key.replace("AFB", "AFB ")).join(", ");
+  for (const task of tasks) {
     rows.push(new TableRow({ children: [
-      textCell(`Aufgabe ${index + 1}`, true, 18),
-      new TableCell({ children: mathParagraphs(task.expectation || "–") }),
-      textCell(afb || "–", false, 18),
-      textCell(task.pointsRaw || String(task.maxPoints), false, 18),
+      expectationCell(task.title || "Aufgabe"),
+      new TableCell({ children: mathParagraphs(task.expectation || "") }),
+      expectationCell(task.pointsRaw || String(task.maxPoints)),
     ] }));
-  });
+  }
 
   const total = totalPoints(tasks, metadata);
   const children: any[] = [
-    new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "Erwartungshorizont", bold: true, font: "Verdana", size: 30 })], spacing: { after: 80 } }),
-    new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `${metadata.title || "Klassenarbeit"} · Klasse ${metadata.classLevel || ""} · ${metadata.topic || ""}`, font: "Verdana", size: 20 })], spacing: { after: 160 } }),
-    new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: allBorders, rows }),
-    new Paragraph({ children: [new TextRun({ text: `Gesamtpunktzahl: ${total}`, bold: true, font: "Verdana", size: 20 })], spacing: { before: 200, after: 140 } }),
-    new Paragraph({ children: [new TextRun({ text: "Notenpunkte-Tabelle:", bold: true, font: "Verdana", size: 20 })], spacing: { after: 70 } }),
-    gradeTable(total),
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      layout: TableLayoutType.AUTOFIT,
+      borders: allBorders,
+      rows,
+    }),
+    new Paragraph({ children: [aptosRun("Notenpunkte-Tabelle:")] }),
+    horizontalGradeTable(total),
   ];
 
   return Packer.toBuffer(new Document({
-    styles: { default: { document: { run: { font: "Verdana", size: 20 } } } },
-    sections: [{ properties: { page: { margin: { top: 850, right: 850, bottom: 850, left: 850 } } }, children }],
+    styles: { default: { document: { run: { font: "Aptos", size: 22 } } } },
+    sections: [{
+      properties: { page: { margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 } } },
+      children,
+    }],
   }));
 }
 

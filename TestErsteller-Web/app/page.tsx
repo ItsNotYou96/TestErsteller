@@ -354,7 +354,7 @@ export default function Home() {
             </div>
             <label>Titel<input value={meta.title} onChange={(e) => setMeta({ ...meta, title: e.target.value })} /></label>
             <label>Hilfsmittel<input value={meta.tools} onChange={(e) => setMeta({ ...meta, tools: e.target.value })} placeholder="z. B. Taschenrechner, Formelsammlung" /></label>
-            <label>Formelpunkte<input value={meta.formPoints} onChange={(e) => setMeta({ ...meta, formPoints: e.target.value })} placeholder="optional" /></label>
+            <label>Formpunkte<input value={meta.formPoints} onChange={(e) => setMeta({ ...meta, formPoints: e.target.value })} placeholder="optional" /></label>
             <div className="dialogFieldGrid">
               <label>Lehrkraft<input value={meta.teacher} onChange={(e) => setMeta({ ...meta, teacher: e.target.value })} placeholder="Name der Lehrkraft" /></label>
               <label>Datum<input type="date" value={meta.date} onChange={(e) => setMeta({ ...meta, date: e.target.value })} /></label>

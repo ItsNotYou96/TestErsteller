@@ -54,3 +54,25 @@ Ein echter Notion-Integrationstest ist erst möglich, sobald `NOTION_TOKEN` gese
 - Default title aligned to the WPF application: "Klassenarbeit".
 - TypeScript/TSX syntax/transpile check passed for all project source files.
 - Full dependency-aware `next build` was not run locally because the project dependencies are not installed in this runtime; Vercel performs the authoritative production build.
+
+## v1.4 – Word-Export gegen WPF-Referenz abgeglichen
+
+Referenzdateien: `Klassenarbeit.docx` und `Klassenarbeit_Erwartung.docx`, erzeugt durch die WPF-App.
+
+Anpassungen:
+- Kopfbereich als echter Word-Header, damit er auf Folgeseiten wiederholt wird.
+- 4-spaltiger WPF-Kopf: Schule/Klasse/Lehrkraft, Titel/Thema, FRO-Logo, Datum.
+- Schüler-/Bewertungstabelle wie in der Referenz: Vorname, Name, Hilfsmittel, Aufgabenpunkte in Dreierspalten, Formpunkte, Punktzahl/Notenpunkte/Note.
+- Kompakter zweizeiliger Notenspiegel mit Überschrift.
+- Hinweise ohne Umrandung und mit den originalen Piktogrammen sowie Trennlinie.
+- Aufgabenüberschrift enthält wieder Aufgabennummer, Titel und die originale Punktezerlegung (`pointsRaw`).
+- Keine zusätzliche Punktezeile nach jeder Aufgabe.
+- Aufgabenbilder werden – wie im WPF-Export – in ihren Original-Pixelmaßen eingefügt und links ausgerichtet.
+- Erwartungshorizont wieder mit exakt 3 Spalten: Aufgabe, Erwartungshorizont, Punkte (keine zusätzliche AFB-Spalte).
+- Notenpunkte-Tabelle wieder horizontal mit Prozent / Notenpunkte / Punkte ab.
+- Standard-Schrift im Dokument auf Aptos 11 pt; WPF-spezifische Kopfbereiche mit den in der Referenz beobachteten Größen/Schriften.
+
+Prüfung:
+- TypeScript/TSX-Syntax mit TypeScript 5.8.3 erfolgreich geparst.
+- Die verwendeten docx-API-Elemente (Header, TableLayoutType, HeightRule, UnderlineType, VerticalAlign, BorderStyle) wurden gegen die aktuelle docx-API-Dokumentation abgeglichen.
+- Ein vollständiger `next build` ist in dieser Sandbox weiterhin nicht möglich, da die npm-Abhängigkeiten hier nicht vollständig installiert sind; Vercel führt den vollständigen Build beim Deployment aus.
