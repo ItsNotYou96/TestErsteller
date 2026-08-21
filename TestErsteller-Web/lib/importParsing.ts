@@ -279,6 +279,28 @@ function pointsFromChunk(chunk: string, heading: string) {
   return inline ? inline[1].replace(/\s+/g, "") : "";
 }
 
+
+function heuristicPointsRaw(text: string) {
+  const parts = Array.from(text.matchAll(/(?:^|\n)\s*\*?([a-z])\)\s*/gim));
+  if (parts.length) {
+    const values = parts.map((match, index) => {
+      const start = (match.index || 0) + match[0].length;
+      const end = index + 1 < parts.length ? (parts[index + 1].index || text.length) : text.length;
+      const chunk = text.slice(start, end).toLowerCase();
+      if (/begr(?:ü|u)nd|beweis|beurteil|bewert|erkl(?:ä|a)r|erl(?:ä|a)uter|analys|interpret|modellier/.test(chunk)) return 3;
+      if (/zeichn|skizz|konstrui/.test(chunk) || chunk.length > 180) return 2;
+      // Pure calculations/equations usually need only one result point per short subtask.
+      if (/[=+\-*/:^]/.test(chunk) && /\d/.test(chunk)) return 1;
+      return 2;
+    });
+    return values.join("+");
+  }
+  const lower = text.toLowerCase();
+  if (/begr(?:ü|u)nd|beweis|beurteil|bewert|analys|interpret|modellier/.test(lower)) return "4";
+  if (/zeichn|skizz|konstrui/.test(lower) || text.length > 350) return "3";
+  return "2";
+}
+
 function topicScores(text: string, classLevel: string) {
   const keywords: Record<string, string[]> = {
     "Terme": ["term", "variable", "klammer", "ausmultipl", "zusammenfass"],
@@ -409,10 +431,11 @@ export function heuristicDrafts(sources: ParsedSource[], defaultClass?: string, 
       const bodyLines = text.split("\n");
       const heading = bodyLines.shift() || firstLine;
       const taskNumber = taskNumberFromHeading(heading);
-      const pointsRaw = pointsFromChunk(text, heading);
+      const documentPointsRaw = pointsFromChunk(text, heading);
+      const pointsRaw = documentPointsRaw || heuristicPointsRaw(text);
       const maxPoints = parsePointsSpec(pointsRaw).maxPoints || 0;
       const classLevel = guessClass(`${source.name}\n${text}`, defaultClass);
-      const topic = guessTopic(`${source.name}\n${text}`, classLevel, defaultTopic);
+      const topic = guessTopic(text, classLevel, defaultTopic);
       const title = titleFromChunk(text, heading, taskNumber) || `Aufgabe ${taskNumber || drafts.length + 1}`;
       const cleanedFirstLine = cleanTaskHeading(heading);
       const explicitHeading = /^\s*Aufgabe\s*\d+/i.test(heading);
@@ -439,6 +462,7 @@ export function heuristicDrafts(sources: ParsedSource[], defaultClass?: string, 
         afbRaw: guessAfb(questionText),
         pointsRaw,
         maxPoints,
+        pointsSource: documentPointsRaw ? "document" : "heuristic",
         estimatedTime: estimatedTime(maxPoints, questionText),
         expectation: "",
         imageDataUrl: image?.dataUrl,

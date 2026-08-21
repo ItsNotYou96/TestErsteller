@@ -1,6 +1,7 @@
 import type { ImportDraft } from "./adminTypes";
 import type { Competence } from "./types";
 import { LEGACY_TOPICS_BY_CLASS } from "./wpfDatabaseMap";
+import { parsePointsSpec } from "./taskParsing";
 
 const COMPETENCES: Competence[] = ["Argumentieren", "Problemlösen", "Modellieren", "Darstellungen", "Mathematik", "Kommunizieren"];
 
@@ -12,17 +13,6 @@ export function llmModel() {
   return process.env.GROQ_MODEL?.trim() || "openai/gpt-oss-120b";
 }
 
-function outputText(data: any) {
-  if (typeof data?.output_text === "string") return data.output_text;
-  const parts: string[] = [];
-  for (const item of data?.output || []) {
-    for (const content of item?.content || []) {
-      if (content?.type === "output_text" && typeof content.text === "string") parts.push(content.text);
-    }
-  }
-  return parts.join("\n");
-}
-
 const singleTaskSchema = {
   type: "object",
   additionalProperties: false,
@@ -31,6 +21,7 @@ const singleTaskSchema = {
     topic: { type: "string" },
     competence: { type: "string", enum: COMPETENCES },
     afbRaw: { type: "string" },
+    pointsRaw: { type: "string" },
     estimatedTime: { type: "number" },
     expectation: { type: "string" },
     confidenceTopic: { type: "number" },
@@ -40,7 +31,7 @@ const singleTaskSchema = {
     confidenceExpectation: { type: "number" },
   },
   required: [
-    "title", "topic", "competence", "afbRaw", "estimatedTime", "expectation",
+    "title", "topic", "competence", "afbRaw", "pointsRaw", "estimatedTime", "expectation",
     "confidenceTopic", "confidenceCompetence", "confidenceAfb", "confidenceTime", "confidenceExpectation",
   ],
 } as const;
@@ -49,25 +40,29 @@ function compactPrompt(draft: ImportDraft, defaultClass?: string, defaultTopic?:
   const classLevel = defaultClass && LEGACY_TOPICS_BY_CLASS[defaultClass] ? defaultClass : draft.classLevel;
   const topics = LEGACY_TOPICS_BY_CLASS[classLevel] || [];
   const preferredTopic = defaultTopic && topics.includes(defaultTopic) ? defaultTopic : draft.topic;
-  const question = draft.questionText.slice(0, 12000);
+  const question = draft.questionText.slice(0, 10500);
+  const pointsKnown = draft.pointsSource === "document" && Boolean(draft.pointsRaw);
 
-  return `Ordne genau EINE Mathematikaufgabe für einen schulischen Aufgabenpool ein. Die Aufgabe wurde bereits zuverlässig aus dem Dokument getrennt. Gib deshalb NICHT den Aufgabentext und NICHT die Punkte erneut aus, sondern nur die Metadaten und einen knappen Erwartungshorizont.
+  return `Analysiere genau EINE bereits getrennte Mathematikaufgabe für einen schulischen Aufgabenpool. Antworte ausschließlich mit den geforderten strukturierten Metadaten.
 
 Klasse: ${classLevel}
-Zulässige Themen für diese Klasse: ${topics.join(" | ")}
+Zulässige Themen: ${topics.join(" | ")}
 ${preferredTopic ? `Bisheriger Themenvorschlag: ${preferredTopic}` : ""}
 Zulässige Prozesskompetenzen: ${COMPETENCES.join(", ")}
-Bereits erkannte Punkte: ${draft.pointsRaw || "nicht sicher erkannt"}
+Bisherige Punkte: ${draft.pointsRaw || "nicht im Dokument angegeben"}
+Punkte im Originaldokument sicher erkannt: ${pointsKnown ? "JA" : "NEIN"}
 Bisheriger AFB-Vorschlag: ${draft.afbRaw || "AFB 1"}
 
 Regeln:
 - title: kurz und sachlich, möglichst 2-6 Wörter.
 - topic: ausschließlich eines der oben genannten Themen.
-- competence: die DOMINANTE Prozesskompetenz der gesamten Aufgabe.
-- afbRaw: global "AFB 1" oder bei Teilaufgaben z. B. "a: AFB 1, b: AFB 2". AFB 1 = Reproduzieren, AFB 2 = Zusammenhänge herstellen, AFB 3 = Verallgemeinern/Reflektieren.
+- competence: DOMINANTE Prozesskompetenz der gesamten Aufgabe.
+- afbRaw: global "AFB 1" oder bei Teilaufgaben z. B. "a: AFB 1, b: AFB 2".
+- pointsRaw: ${pointsKnown ? `EXAKT "${draft.pointsRaw}" zurückgeben; diese Punkte stammen aus dem Dokument und dürfen nicht verändert werden.` : "realistische Bepunktung vorschlagen. Bei Teilaufgaben als Summe wie 2+2+3; sonst eine einzelne Zahl. Nur Zahlen und + verwenden."}
 - estimatedTime: realistische Bearbeitungszeit in Minuten.
-- expectation: knapper, fachlich korrekter Erwartungshorizont. Bei Rechenaufgaben Ergebnisse und wesentliche Rechenschritte; bei offenen Aufgaben Bewertungskriterien. Maximal ca. 120 Wörter.
-- confidence-Werte jeweils 0 bis 1.
+- expectation: knapper fachlich korrekter Erwartungshorizont, bei Rechenaufgaben Ergebnis und wesentliche Schritte, maximal ca. 100 Wörter.
+- confidence-Werte: jeweils zwischen 0 und 1.
+- Gib keinen Aufgabentext erneut aus.
 
 Aufgabe:
 ${question}`;
@@ -100,21 +95,30 @@ function rateLimitInfo(response: Response): GroqRateLimitInfo {
   };
 }
 
-export async function analyzeDraftWithLlm(draft: ImportDraft, defaultClass?: string, defaultTopic?: string): Promise<ImportDraft> {
-  const apiKey = process.env.GROQ_API_KEY?.trim();
-  if (!apiKey) return draft;
+function chatOutput(data: any) {
+  const content = data?.choices?.[0]?.message?.content;
+  if (typeof content === "string") return content.trim();
+  return "";
+}
 
-  const response = await fetch("https://api.groq.com/openai/v1/responses", {
+async function groqChat(prompt: string, strict: boolean) {
+  const apiKey = process.env.GROQ_API_KEY?.trim();
+  if (!apiKey) throw new GroqAnalysisError("GROQ_API_KEY ist nicht gesetzt.", 503);
+
+  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: llmModel(),
-      input: compactPrompt(draft, defaultClass, defaultTopic),
-      reasoning: { effort: "low" },
-      text: { format: { type: "json_schema", name: "math_task_metadata", strict: true, schema: singleTaskSchema } },
-      // The Free Tier has 8K TPM. The old importer reserved 14K output tokens in one request,
-      // which alone could make Groq reject the request with HTTP 413. A single task needs far less.
-      max_output_tokens: 700,
+      messages: [
+        { role: "user", content: `Du klassifizierst Mathematikaufgaben. Halte dich exakt an das verlangte JSON-Format und erfinde keine Informationen aus einem anderen Aufgabentext.\n\n${prompt}` },
+      ],
+      reasoning_effort: "low",
+      reasoning_format: "hidden",
+      response_format: strict
+        ? { type: "json_schema", json_schema: { name: "math_task_metadata", strict: true, schema: singleTaskSchema } }
+        : { type: "json_object" },
+      max_completion_tokens: 800,
     }),
     cache: "no-store",
   });
@@ -123,16 +127,49 @@ export async function analyzeDraftWithLlm(draft: ImportDraft, defaultClass?: str
     const body = await response.text();
     throw new GroqAnalysisError(`Groq-Analyse fehlgeschlagen (${response.status}): ${body}`, response.status, rateLimitInfo(response));
   }
-
   const data = await response.json();
-  const text = outputText(data);
-  if (!text) throw new GroqAnalysisError("Groq-Analyse hat keine strukturierte Ausgabe geliefert.", 502, rateLimitInfo(response));
-  const task = JSON.parse(text) as any;
+  const text = chatOutput(data);
+  if (!text) throw new GroqAnalysisError("Groq-Analyse hat keine JSON-Ausgabe geliefert.", 502, rateLimitInfo(response));
+  return { text, rateLimit: rateLimitInfo(response) };
+}
+
+function isOutputParseFailure(error: unknown) {
+  return error instanceof GroqAnalysisError && error.status === 400 && /output_parse_failed|parsing failed|could not be parsed|json/i.test(error.message);
+}
+
+function safePoints(raw: unknown, fallback: string) {
+  const value = String(raw || "").replace(/\s+/g, "").replace(/,/g, ".");
+  if (/^\d+(?:\.\d+)?(?:\+\d+(?:\.\d+)?)*$/.test(value)) return value;
+  return fallback;
+}
+
+export async function analyzeDraftWithLlm(draft: ImportDraft, defaultClass?: string, defaultTopic?: string): Promise<ImportDraft> {
+  if (!process.env.GROQ_API_KEY?.trim()) return draft;
+  const prompt = compactPrompt(draft, defaultClass, defaultTopic);
+
+  let text = "";
+  try {
+    text = (await groqChat(prompt, true)).text;
+  } catch (error) {
+    if (!isOutputParseFailure(error)) throw error;
+    // Rare Groq parser failures have occurred with the Responses endpoint. Retry once with
+    // JSON Object Mode; the application still validates every field below.
+    const fallbackPrompt = `${prompt}\n\nAntworte jetzt als EIN gültiges JSON-Objekt mit exakt diesen Schlüsseln: title, topic, competence, afbRaw, pointsRaw, estimatedTime, expectation, confidenceTopic, confidenceCompetence, confidenceAfb, confidenceTime, confidenceExpectation.`;
+    text = (await groqChat(fallbackPrompt, false)).text;
+  }
+
+  let task: any;
+  try { task = JSON.parse(text); }
+  catch { throw new GroqAnalysisError("Groq hat trotz Wiederholungsversuch kein gültiges JSON geliefert.", 502); }
 
   const classLevel = defaultClass && LEGACY_TOPICS_BY_CLASS[defaultClass] ? defaultClass : draft.classLevel;
   const allowedTopics = LEGACY_TOPICS_BY_CLASS[classLevel] || [];
   const fallbackTopic = defaultTopic && allowedTopics.includes(defaultTopic) ? defaultTopic : draft.topic;
   const topic = allowedTopics.includes(String(task.topic)) ? String(task.topic) : (allowedTopics.includes(fallbackTopic) ? fallbackTopic : allowedTopics[0] || "");
+
+  const preserveDocumentPoints = draft.pointsSource === "document" && Boolean(draft.pointsRaw);
+  const pointsRaw = preserveDocumentPoints ? draft.pointsRaw : safePoints(task.pointsRaw, draft.pointsRaw || "2");
+  const maxPoints = parsePointsSpec(pointsRaw).maxPoints || draft.maxPoints || 0;
 
   return {
     ...draft,
@@ -141,6 +178,9 @@ export async function analyzeDraftWithLlm(draft: ImportDraft, defaultClass?: str
     topic,
     competence: (COMPETENCES.includes(task.competence) ? task.competence : draft.competence) as Competence,
     afbRaw: String(task.afbRaw || draft.afbRaw || "AFB 1").trim(),
+    pointsRaw,
+    maxPoints,
+    pointsSource: preserveDocumentPoints ? "document" : "llm",
     estimatedTime: Math.max(0, Number(task.estimatedTime) || draft.estimatedTime || 0),
     expectation: String(task.expectation || draft.expectation || "").trim(),
     analysisMode: "llm",
@@ -154,7 +194,6 @@ export async function analyzeDraftWithLlm(draft: ImportDraft, defaultClass?: str
   };
 }
 
-// Kept for backwards compatibility with older code paths. New imports analyze one task per request.
 export async function analyzeWithLlm(_sources: unknown[], heuristics: ImportDraft[], defaultClass?: string, defaultTopic?: string) {
   const out: ImportDraft[] = [];
   for (const draft of heuristics) out.push(await analyzeDraftWithLlm(draft, defaultClass, defaultTopic));

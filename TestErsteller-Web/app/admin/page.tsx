@@ -155,7 +155,7 @@ export default function AdminPage() {
 
   function changeClass(draft: ImportDraft, classLevel: string) {
     const topics = LEGACY_TOPICS_BY_CLASS[classLevel] || [];
-    patchDraft(draft.id, { classLevel, topic: topics.includes(draft.topic) ? draft.topic : topics[0] || "", duplicate: undefined });
+    patchDraft(draft.id, { classLevel, topic: topics.includes(draft.topic) ? draft.topic : topics[0] || "", duplicate: undefined, duplicates: undefined });
   }
 
   async function addImage(draft: ImportDraft, file?: File) {
@@ -276,7 +276,7 @@ export default function AdminPage() {
               {drafts.map((draft, index) => (
                 <button key={draft.id} className={`adminDraftCard ${selected?.id === draft.id ? "active" : ""} ${!draft.include ? "excluded" : ""}`} onClick={() => setSelectedId(draft.id)}>
                   <span className="adminDraftIndex">{index + 1}</span>
-                  <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P. · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}{draft.mathRepair === "visual" ? " · Mathe visuell korrigiert" : draft.mathRepair === "rejected" ? " · Mathe-Korrektur verworfen" : ""}</small></span>
+                  <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P.{draft.pointsSource === "heuristic" ? " (geschätzt)" : ""} · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}{draft.mathRepair === "visual" ? " · Mathe visuell korrigiert" : draft.mathRepair === "rejected" ? " · Mathe-Korrektur verworfen" : ""}</small></span>
                   <span className="adminDraftBadges">{draft.duplicate && <em className={draft.duplicate.score >= .96 ? "danger" : "warn"}>{Math.round(draft.duplicate.score * 100)}% ähnlich</em>}{draft.include ? <Check size={16} /> : <X size={16} />}</span>
                 </button>
               ))}
@@ -291,16 +291,17 @@ export default function AdminPage() {
 
                 {selected.duplicate && (
                   <section className={`adminDuplicate ${selected.duplicate.score >= .96 ? "high" : ""}`}>
-                    <div><AlertTriangle size={18} /><strong>Mögliches Duplikat: {Math.round(selected.duplicate.score * 100)} % Ähnlichkeit</strong></div>
-                    <p><b>Vorhanden:</b> {selected.duplicate.title} · {selected.duplicate.competence}</p>
-                    <details><summary>Vorhandene Aufgabe vergleichen</summary><div className="adminExistingQuestion"><LatexText text={selected.duplicate.questionText} /></div></details>
+                    <div><AlertTriangle size={18} /><strong>Ähnliche Aufgabe gefunden: {Math.round(selected.duplicate.score * 100)} %</strong></div>
+                    <p><b>Bester Treffer:</b> {selected.duplicate.title} · {selected.duplicate.topic} · {selected.duplicate.competence}</p>
+                    <details><summary>Bestehende Aufgabe vergleichen</summary><div className="adminExistingQuestion"><LatexText text={selected.duplicate.questionText} /></div></details>
+                    {(selected.duplicates?.length || 0) > 1 && <details className="adminDuplicateMore"><summary>Weitere ähnliche Treffer ({Math.min((selected.duplicates?.length || 1) - 1, 4)})</summary>{selected.duplicates?.slice(1, 5).map((candidate) => <div className="adminDuplicateCandidate" key={candidate.id}><b>{Math.round(candidate.score * 100)} %</b><span>{candidate.title} · {candidate.topic} · {candidate.competence}</span></div>)}</details>}
                   </section>
                 )}
 
                 <div className="adminEditorGrid">
                   <label className="span2">Titel<input value={selected.title} onChange={(e) => patchDraft(selected.id, { title: e.target.value })} /></label>
                   <label>Klasse<select value={selected.classLevel} onChange={(e) => changeClass(selected, e.target.value)}>{LEGACY_CLASSES.filter((x) => Number(x) <= 10).map((x) => <option key={x}>{x}</option>)}</select></label>
-                  <label>Thema<select value={selected.topic} onChange={(e) => patchDraft(selected.id, { topic: e.target.value, duplicate: undefined })}>{(LEGACY_TOPICS_BY_CLASS[selected.classLevel] || []).map((x) => <option key={x}>{x}</option>)}</select></label>
+                  <label>Thema<select value={selected.topic} onChange={(e) => patchDraft(selected.id, { topic: e.target.value })}>{(LEGACY_TOPICS_BY_CLASS[selected.classLevel] || []).map((x) => <option key={x}>{x}</option>)}</select></label>
                   <label>Kompetenz<select value={selected.competence} onChange={(e) => patchDraft(selected.id, { competence: e.target.value as Competence })}>{competences.map((x) => <option key={x}>{x}</option>)}</select></label>
                   <label>AFB<input value={selected.afbRaw} onChange={(e) => patchDraft(selected.id, { afbRaw: e.target.value })} placeholder="z. B. a: AFB 1, b: AFB 2" /></label>
                   <label>Punkte<input value={selected.pointsRaw} onChange={(e) => { const pointsRaw = e.target.value; patchDraft(selected.id, { pointsRaw, maxPoints: parsePointsSpec(pointsRaw).maxPoints }); }} placeholder="z. B. 1+1+2" /></label>

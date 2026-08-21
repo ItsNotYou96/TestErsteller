@@ -91,9 +91,8 @@ export async function POST(request: NextRequest) {
 
     if (useLlm) {
       const sparsePdf = sources.some((source) => source.mimeType === "application/pdf" && (source.text || "").trim().length < 400);
-      if (sparsePdf) warnings.push("Mindestens eine PDF enthält kaum auslesbaren Text. v2.2 erzeugt daraus bewusst keine Vision-Aufgaben ohne verlässliche Textanker. Solche Scan-PDFs sollten zuerst mit einer echten OCR-Textschicht versehen werden.");
+      if (sparsePdf) warnings.push("Mindestens eine PDF enthält kaum auslesbaren Text. Die Anwendung erzeugt daraus bewusst keine Vision-Aufgaben ohne verlässliche Textanker. Solche Scan-PDFs sollten zuerst mit einer echten OCR-Textschicht versehen werden.");
       if (!llmConfigured()) warnings.push("KI-Analyse wurde angefordert, aber GROQ_API_KEY ist nicht gesetzt. Heuristische Analyse verwendet.");
-      else if (drafts.length) warnings.push("Die Aufgaben wurden zuerst lokal getrennt. Groq darf anschließend nur Metadaten zu diesen bereits vorhandenen Aufgaben analysieren; es kann keine neuen Aufgaben hinzufügen.");
     }
 
     if (!drafts.length) {

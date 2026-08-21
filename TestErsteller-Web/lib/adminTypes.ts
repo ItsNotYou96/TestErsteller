@@ -21,6 +21,7 @@ export interface ImportDraft {
   afbRaw: string;
   pointsRaw: string;
   maxPoints: number;
+  pointsSource?: "document" | "heuristic" | "llm";
   estimatedTime: number;
   expectation: string;
   imageDataUrl?: string;
@@ -30,6 +31,7 @@ export interface ImportDraft {
   sourcePages?: number[];
   mathRepair?: "none" | "visual" | "rejected";
   duplicate?: DuplicateCandidate;
+  duplicates?: DuplicateCandidate[];
   confidence?: {
     topic: number;
     competence: number;

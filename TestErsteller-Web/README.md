@@ -138,3 +138,13 @@ Jede visuelle Korrektur wird serverseitig verworfen, sobald Aufgabennummern, Tei
 Zusätzlich repariert der lokale PDF-Parser häufige einfache Fälle wie gestapelte Brüche (`3/4`) bereits ohne Groq. Komplexe Formelsätze werden nur mit der abgesicherten visuellen Korrektur nachgelesen.
 
 Die Duplikatprüfung berücksichtigt ab v2.2 echte Zahlen, Operatoren, mathematische Tokens, Prosa, Titel und Aufgabenstruktur getrennt. Eine Warnung erscheint erst ab ca. 74 %, automatisch abgewählt wird eine Aufgabe erst bei mindestens 96 % Ähnlichkeit.
+
+
+## v2.3 – Admin-Import
+
+- Fehlende Punkte werden nun heuristisch vorgeschlagen und bei aktiver Groq-Analyse fachlich verfeinert. Im Dokument vorhandene Punkte werden nicht überschrieben.
+- Die linke Aufgabenliste im Prüffenster hat einen eigenen, zuverlässig scrollbaren Bereich.
+- Die Duplikatsuche prüft nicht mehr nur das vorgeschlagene Thema, sondern auch verwandte bzw. weitere Themen derselben Klasse und weiterhin alle K1–K6-Datenbanken. Bis zu fünf Treffer werden angezeigt.
+- Die Ähnlichkeitsfunktion normalisiert typische mathematische Formulierungen (z. B. „Term aufstellen“ / „mit einem Term ausdrücken“) und berücksichtigt Text, mathematische Struktur, Zahlen und Teilaufgaben getrennt.
+- Groq-Metadaten werden über Chat Completions mit strict JSON Schema angefordert; bei einem seltenen Parserfehler erfolgt automatisch ein JSON-Object-Retry.
+- Der frühere technische Hinweis, dass Groq keine neuen Aufgaben hinzufügen darf, wurde aus der Oberfläche entfernt.
