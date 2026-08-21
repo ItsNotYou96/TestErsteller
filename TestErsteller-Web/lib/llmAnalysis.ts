@@ -1,9 +1,6 @@
-import { randomUUID } from "node:crypto";
 import type { ImportDraft } from "./adminTypes";
-import type { ParsedSource } from "./importParsing";
 import type { Competence } from "./types";
 import { LEGACY_TOPICS_BY_CLASS } from "./wpfDatabaseMap";
-import { parsePointsSpec } from "./taskParsing";
 
 const COMPETENCES: Competence[] = ["Argumentieren", "Problemlösen", "Modellieren", "Darstellungen", "Mathematik", "Kommunizieren"];
 
@@ -26,132 +23,140 @@ function outputText(data: any) {
   return parts.join("\n");
 }
 
-const schema = {
+const singleTaskSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    tasks: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          sourceFile: { type: "string" },
-          title: { type: "string" },
-          questionText: { type: "string" },
-          classLevel: { type: "string", enum: ["7", "8", "9", "10"] },
-          topic: { type: "string" },
-          competence: { type: "string", enum: COMPETENCES },
-          afbRaw: { type: "string" },
-          pointsRaw: { type: "string" },
-          estimatedTime: { type: "number" },
-          expectation: { type: "string" },
-          confidenceTopic: { type: "number" },
-          confidenceCompetence: { type: "number" },
-          confidenceAfb: { type: "number" },
-          confidenceTime: { type: "number" },
-          confidenceExpectation: { type: "number" },
-        },
-        required: [
-          "sourceFile", "title", "questionText", "classLevel", "topic", "competence", "afbRaw", "pointsRaw",
-          "estimatedTime", "expectation", "confidenceTopic", "confidenceCompetence", "confidenceAfb", "confidenceTime", "confidenceExpectation",
-        ],
-      },
-    },
+    title: { type: "string" },
+    topic: { type: "string" },
+    competence: { type: "string", enum: COMPETENCES },
+    afbRaw: { type: "string" },
+    estimatedTime: { type: "number" },
+    expectation: { type: "string" },
+    confidenceTopic: { type: "number" },
+    confidenceCompetence: { type: "number" },
+    confidenceAfb: { type: "number" },
+    confidenceTime: { type: "number" },
+    confidenceExpectation: { type: "number" },
   },
-  required: ["tasks"],
+  required: [
+    "title", "topic", "competence", "afbRaw", "estimatedTime", "expectation",
+    "confidenceTopic", "confidenceCompetence", "confidenceAfb", "confidenceTime", "confidenceExpectation",
+  ],
 } as const;
 
-function prompt(sources: ParsedSource[], heuristics: ImportDraft[], defaultClass?: string, defaultTopic?: string) {
-  const topicMap = Object.entries(LEGACY_TOPICS_BY_CLASS)
-    .filter(([cls]) => ["7", "8", "9", "10"].includes(cls))
-    .map(([cls, topics]) => `Klasse ${cls}: ${topics.join(" | ")}`)
-    .join("\n");
-  const sourceText = sources.map((source) => `\n===== DATEI: ${source.name} =====\n${(source.text || source.simplified).slice(0, 60000)}`).join("\n");
-  const heuristicText = heuristics.length
-    ? `\nVorläufig bereits erkannte Aufgaben (nur als Orientierung, korrigiere Fehler):\n${JSON.stringify(heuristics.map((x) => ({ sourceFile: x.sourceFile, title: x.title, questionText: x.questionText, pointsRaw: x.pointsRaw }))).slice(0, 40000)}`
-    : "";
+function compactPrompt(draft: ImportDraft, defaultClass?: string, defaultTopic?: string) {
+  const classLevel = defaultClass && LEGACY_TOPICS_BY_CLASS[defaultClass] ? defaultClass : draft.classLevel;
+  const topics = LEGACY_TOPICS_BY_CLASS[classLevel] || [];
+  const preferredTopic = defaultTopic && topics.includes(defaultTopic) ? defaultTopic : draft.topic;
+  const question = draft.questionText.slice(0, 12000);
 
-  return `Du analysierst Mathematik-Arbeitsblätter/Klassenarbeiten für einen Aufgabenpool. Extrahiere jede eigenständige Aufgabe. Teilaufgaben a), b), c) bleiben gemeinsam in EINER Aufgabe, sofern sie unter derselben Aufgabennummer stehen.
+  return `Ordne genau EINE Mathematikaufgabe für einen schulischen Aufgabenpool ein. Die Aufgabe wurde bereits zuverlässig aus dem Dokument getrennt. Gib deshalb NICHT den Aufgabentext und NICHT die Punkte erneut aus, sondern nur die Metadaten und einen knappen Erwartungshorizont.
 
-Zulässige Themen sind ausschließlich:
-${topicMap}
-
-Zulässige Prozesskompetenzen sind ausschließlich: ${COMPETENCES.join(", ")}.
+Klasse: ${classLevel}
+Zulässige Themen für diese Klasse: ${topics.join(" | ")}
+${preferredTopic ? `Bisheriger Themenvorschlag: ${preferredTopic}` : ""}
+Zulässige Prozesskompetenzen: ${COMPETENCES.join(", ")}
+Bereits erkannte Punkte: ${draft.pointsRaw || "nicht sicher erkannt"}
+Bisheriger AFB-Vorschlag: ${draft.afbRaw || "AFB 1"}
 
 Regeln:
-- Nutze einen kurzen sachlichen Titel. Wenn ein Titel im Dokument vorhanden ist, übernimm ihn.
-- questionText enthält den vollständigen Aufgabentext inklusive Teilaufgaben und LaTeX-artiger Schreibweise, aber keine Überschrift "Aufgabe N".
-- pointsRaw soll die originale Punktezerlegung enthalten, z. B. "1+1+2" oder "7+3". Erfinde keine Punkte, wenn sie nicht sicher bestimmbar sind; dann leer lassen.
-- afbRaw darf global "AFB 1" sein oder pro Teilaufgabe z. B. "a: AFB 1, b: AFB 2". AFB 1 = Reproduzieren, AFB 2 = Zusammenhänge herstellen, AFB 3 = Verallgemeinern/Reflektieren.
-- estimatedTime ist eine realistische Bearbeitungszeit in Minuten.
-- expectation: Wenn eine Lösungs-/Erwartungshorizont-Datei beigefügt ist, übernimm und ordne sie der richtigen Aufgabe zu. Wenn keine Lösung vorhanden ist, erstelle einen knappen fachlich korrekten Erwartungshorizont. Kennzeichne NICHT im Text, dass er KI-generiert ist; die Oberfläche kennzeichnet das separat.
-- classLevel und topic müssen zueinander passen. ${defaultClass ? `Bevorzugter Jahrgang aus der Adminauswahl: ${defaultClass}.` : ""} ${defaultTopic ? `Bevorzugtes Thema aus der Adminauswahl: ${defaultTopic}.` : ""}
-- confidence-Werte liegen zwischen 0 und 1.
-- Ignoriere Kopfzeilen, Notenspiegel, Hinweise, Namensfelder und reine Bewertungstabellen.
-${heuristicText}
+- title: kurz und sachlich, möglichst 2-6 Wörter.
+- topic: ausschließlich eines der oben genannten Themen.
+- competence: die DOMINANTE Prozesskompetenz der gesamten Aufgabe.
+- afbRaw: global "AFB 1" oder bei Teilaufgaben z. B. "a: AFB 1, b: AFB 2". AFB 1 = Reproduzieren, AFB 2 = Zusammenhänge herstellen, AFB 3 = Verallgemeinern/Reflektieren.
+- estimatedTime: realistische Bearbeitungszeit in Minuten.
+- expectation: knapper, fachlich korrekter Erwartungshorizont. Bei Rechenaufgaben Ergebnisse und wesentliche Rechenschritte; bei offenen Aufgaben Bewertungskriterien. Maximal ca. 120 Wörter.
+- confidence-Werte jeweils 0 bis 1.
 
-Dokumenttext:
-${sourceText}`;
+Aufgabe:
+${question}`;
 }
 
-export async function analyzeWithLlm(sources: ParsedSource[], heuristics: ImportDraft[], defaultClass?: string, defaultTopic?: string): Promise<ImportDraft[]> {
-  const apiKey = process.env.GROQ_API_KEY?.trim();
-  if (!apiKey) return heuristics;
+export type GroqRateLimitInfo = {
+  retryAfterSeconds?: number;
+  remainingTokens?: number;
+  resetTokens?: string;
+};
 
-  // GPT-OSS 120B on Groq is text-in/text-out. PDF/DOCX text is therefore
-  // extracted server-side first and only that extracted text is sent to Groq.
-  const content: any[] = [{ type: "input_text", text: prompt(sources, heuristics, defaultClass, defaultTopic) }];
+export class GroqAnalysisError extends Error {
+  status: number;
+  rateLimit: GroqRateLimitInfo;
+  constructor(message: string, status: number, rateLimit: GroqRateLimitInfo = {}) {
+    super(message);
+    this.name = "GroqAnalysisError";
+    this.status = status;
+    this.rateLimit = rateLimit;
+  }
+}
+
+function rateLimitInfo(response: Response): GroqRateLimitInfo {
+  const retry = Number(response.headers.get("retry-after") || "");
+  const remaining = Number(response.headers.get("x-ratelimit-remaining-tokens") || "");
+  return {
+    retryAfterSeconds: Number.isFinite(retry) && retry > 0 ? retry : undefined,
+    remainingTokens: Number.isFinite(remaining) ? remaining : undefined,
+    resetTokens: response.headers.get("x-ratelimit-reset-tokens") || undefined,
+  };
+}
+
+export async function analyzeDraftWithLlm(draft: ImportDraft, defaultClass?: string, defaultTopic?: string): Promise<ImportDraft> {
+  const apiKey = process.env.GROQ_API_KEY?.trim();
+  if (!apiKey) return draft;
 
   const response = await fetch("https://api.groq.com/openai/v1/responses", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: llmModel(),
-      input: [{ role: "user", content }],
-      text: { format: { type: "json_schema", name: "math_task_import", strict: true, schema } },
-      max_output_tokens: 14000,
+      input: compactPrompt(draft, defaultClass, defaultTopic),
+      reasoning: { effort: "low" },
+      text: { format: { type: "json_schema", name: "math_task_metadata", strict: true, schema: singleTaskSchema } },
+      // The Free Tier has 8K TPM. The old importer reserved 14K output tokens in one request,
+      // which alone could make Groq reject the request with HTTP 413. A single task needs far less.
+      max_output_tokens: 700,
     }),
     cache: "no-store",
   });
 
-  if (!response.ok) throw new Error(`Groq-Analyse fehlgeschlagen (${response.status}): ${await response.text()}`);
+  if (!response.ok) {
+    const body = await response.text();
+    throw new GroqAnalysisError(`Groq-Analyse fehlgeschlagen (${response.status}): ${body}`, response.status, rateLimitInfo(response));
+  }
+
   const data = await response.json();
   const text = outputText(data);
-  if (!text) throw new Error("Groq-Analyse hat keine strukturierte Ausgabe geliefert.");
-  const parsed = JSON.parse(text) as { tasks: any[] };
+  if (!text) throw new GroqAnalysisError("Groq-Analyse hat keine strukturierte Ausgabe geliefert.", 502, rateLimitInfo(response));
+  const task = JSON.parse(text) as any;
 
-  return (parsed.tasks || []).map((task, index) => {
-    const matching = heuristics.find((h) => h.sourceFile === task.sourceFile && h.title.toLowerCase() === String(task.title || "").toLowerCase())
-      || heuristics[index];
-    const classLevel = LEGACY_TOPICS_BY_CLASS[String(task.classLevel)] ? String(task.classLevel) : (defaultClass || "7");
-    const allowedTopics = LEGACY_TOPICS_BY_CLASS[classLevel] || [];
-    const topic = allowedTopics.includes(task.topic) ? task.topic : (defaultTopic && allowedTopics.includes(defaultTopic) ? defaultTopic : allowedTopics[0] || "");
-    const pointsRaw = String(task.pointsRaw || matching?.pointsRaw || "").trim();
-    return {
-      id: matching?.id || randomUUID(),
-      sourceFile: String(task.sourceFile || matching?.sourceFile || sources[0]?.name || "Dokument"),
-      title: String(task.title || matching?.title || `Aufgabe ${index + 1}`).trim(),
-      questionText: String(task.questionText || matching?.questionText || "").trim(),
-      classLevel,
-      topic,
-      competence: (COMPETENCES.includes(task.competence) ? task.competence : matching?.competence || "Mathematik") as Competence,
-      afbRaw: String(task.afbRaw || matching?.afbRaw || "AFB 1").trim(),
-      pointsRaw,
-      maxPoints: parsePointsSpec(pointsRaw).maxPoints || matching?.maxPoints || 0,
-      estimatedTime: Math.max(0, Number(task.estimatedTime) || matching?.estimatedTime || 0),
-      expectation: String(task.expectation || matching?.expectation || "").trim(),
-      imageDataUrl: matching?.imageDataUrl,
-      imageName: matching?.imageName,
-      include: matching?.include ?? true,
-      analysisMode: "llm" as const,
-      confidence: {
-        topic: Math.max(0, Math.min(1, Number(task.confidenceTopic) || 0)),
-        competence: Math.max(0, Math.min(1, Number(task.confidenceCompetence) || 0)),
-        afb: Math.max(0, Math.min(1, Number(task.confidenceAfb) || 0)),
-        time: Math.max(0, Math.min(1, Number(task.confidenceTime) || 0)),
-        expectation: Math.max(0, Math.min(1, Number(task.confidenceExpectation) || 0)),
-      },
-    } satisfies ImportDraft;
-  }).filter((x) => x.questionText || x.title);
+  const classLevel = defaultClass && LEGACY_TOPICS_BY_CLASS[defaultClass] ? defaultClass : draft.classLevel;
+  const allowedTopics = LEGACY_TOPICS_BY_CLASS[classLevel] || [];
+  const fallbackTopic = defaultTopic && allowedTopics.includes(defaultTopic) ? defaultTopic : draft.topic;
+  const topic = allowedTopics.includes(String(task.topic)) ? String(task.topic) : (allowedTopics.includes(fallbackTopic) ? fallbackTopic : allowedTopics[0] || "");
+
+  return {
+    ...draft,
+    title: String(task.title || draft.title).trim() || draft.title,
+    classLevel,
+    topic,
+    competence: (COMPETENCES.includes(task.competence) ? task.competence : draft.competence) as Competence,
+    afbRaw: String(task.afbRaw || draft.afbRaw || "AFB 1").trim(),
+    estimatedTime: Math.max(0, Number(task.estimatedTime) || draft.estimatedTime || 0),
+    expectation: String(task.expectation || draft.expectation || "").trim(),
+    analysisMode: "llm",
+    confidence: {
+      topic: Math.max(0, Math.min(1, Number(task.confidenceTopic) || 0)),
+      competence: Math.max(0, Math.min(1, Number(task.confidenceCompetence) || 0)),
+      afb: Math.max(0, Math.min(1, Number(task.confidenceAfb) || 0)),
+      time: Math.max(0, Math.min(1, Number(task.confidenceTime) || 0)),
+      expectation: Math.max(0, Math.min(1, Number(task.confidenceExpectation) || 0)),
+    },
+  };
+}
+
+// Kept for backwards compatibility with older code paths. New imports analyze one task per request.
+export async function analyzeWithLlm(_sources: unknown[], heuristics: ImportDraft[], defaultClass?: string, defaultTopic?: string) {
+  const out: ImportDraft[] = [];
+  for (const draft of heuristics) out.push(await analyzeDraftWithLlm(draft, defaultClass, defaultTopic));
+  return out;
 }

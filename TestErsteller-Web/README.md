@@ -120,8 +120,11 @@ Unter `/admin` gibt es einen geschützten Importbereich für PDF/DOCX. Der Workf
 4. Ähnlichkeitswarnungen gegen bereits vorhandene Aufgaben prüfen.
 5. Nur markierte Aufgaben final in die passende WPF/Notion-Datenbank schreiben.
 
-Der Import kann ohne LLM arbeiten. Für bessere automatische Zuordnung von Thema, Kompetenz, AFB, Zeit und Erwartungshorizont kann serverseitig `OPENAI_API_KEY` gesetzt werden. Das Modell ist über `OPENAI_MODEL` konfigurierbar.
+Der Import kann ohne LLM arbeiten. Für bessere automatische Zuordnung von Thema, Kompetenz, AFB, Zeit und Erwartungshorizont kann serverseitig `GROQ_API_KEY` gesetzt werden. Das Modell ist über `GROQ_MODEL` konfigurierbar.
 
 Für das tatsächliche Schreiben nach Notion benötigt die bestehende Integration neben Leserechten auch **Insert content**. Bilder aus DOCX werden, soweit sie einer Aufgabe zugeordnet werden können, als Notion-Dateiupload gespeichert. Bei PDFs kann ein Aufgabenbild in der Prüfansicht manuell ergänzt werden.
 
 Der derzeitige Importverlauf wird lokal im Browser des Admins gespeichert; die eigentlichen Aufgaben landen weiterhin ausschließlich in Notion.
+
+### Groq Free-Tier import (v2.0)
+The importer first separates tasks locally. If Groq analysis is enabled, each task is then sent separately to `/api/admin/analyze-task`. This keeps each request small and lets the browser automatically pause/retry when the Groq free-tier token-per-minute window is temporarily exhausted.

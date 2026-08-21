@@ -108,10 +108,19 @@ Prüfung:
 - PDF/DOCX-Analyse: DOCX über Mammoth + zusätzliche OMML-Textgewinnung, PDF über `pdf-parse` 2.x.
 - Heuristische Aufgabentrennung erkennt beim vorhandenen WPF-Beispiel `Klassenarbeit.docx` alle 6 Überschriften (`Aufgabe 1` bis `Aufgabe 6`).
 - Erwartungshorizont-Tabellen aus DOCX werden anhand des Aufgabentitels zugeordnet, soweit die Tabellenstruktur `Aufgabe | Erwartungshorizont | Punkte` erkennbar ist.
-- Optionaler LLM-Pfad über die OpenAI Responses API mit Structured Outputs; ohne `OPENAI_API_KEY` bleibt der komplette Prüf-/Notion-Workflow nutzbar.
+- Optionaler LLM-Pfad über die Groq Responses API mit Structured Outputs; ohne `GROQ_API_KEY` bleibt der komplette Prüf-/Notion-Workflow nutzbar.
 - Duplikatprüfung nutzt normalisierte Token-Jaccard- und Trigram-Dice-Ähnlichkeit gegen die vorhandenen Aufgaben des vorgeschlagenen Klasse/Thema-Paars.
 - Finaler Import wird pro Aufgabe einzeln an `/api/admin/commit` geschickt, damit Bilder nicht gemeinsam das Vercel-Requestlimit überschreiten.
 - Notion-Ziel wird aus dem originalen WPF-Mapping Klasse → Thema → Kompetenz gewählt; Page-Properties werden anhand des tatsächlichen Data-Source-Schemas geschrieben.
 - Notion-Dateiupload für Aufgabenbilder implementiert; Integration benötigt `Insert content`.
 - Alle TypeScript/TSX-Dateien mit dem TypeScript-Compiler syntaktisch transpiliert: 0 Syntaxdiagnosen.
 - Vollständiger `npm install`/`next build` konnte in der Containerumgebung nicht abgeschlossen werden, da der Registry-Zugriff innerhalb des Zeitlimits nicht fertig wurde. Der vollständige Integrationsbuild erfolgt daher beim Vercel-Deployment.
+
+## v2.0 Groq / PDF import regression
+- Groq is no longer called once with the complete document and `max_output_tokens: 14000`.
+- Initial import only parses/splits documents heuristically; `/api/admin/analyze-task` enriches one already separated task at a time.
+- Groq request uses `reasoning.effort=low` and `max_output_tokens=700`; UI retries HTTP 429 after the server-provided rate-limit wait.
+- This also removes the single Vercel-function-duration bottleneck for larger imports: the browser performs separate task-analysis requests sequentially.
+- Regression PDF `Klassenarbeit zu rationale Zahlen und Wahrscheinlichkeit - Teil 1.pdf` was checked against its extracted text. Heuristic splitter detects 5 numbered tasks instead of treating the document heading `4. Klassenarbeit` as a task.
+- Point blocks detected for the sample: `7`, `6`, `2+2+2+2`, `6+6`, `3+10`.
+- Full `npm install`/Next production build could not be completed in this sandbox because registry installation timed out. Global TypeScript parsing found no new syntax diagnostics; unresolved framework/package types remain because node_modules is unavailable.

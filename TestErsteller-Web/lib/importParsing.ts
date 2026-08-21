@@ -153,7 +153,7 @@ export async function parseUploadedFile(file: File): Promise<ParsedSource> {
         name: `${name.replace(/\.pdf$/i, "")}-seite-${page.pageNumber || 1}-bild-${index + 1}.png`,
         decorative: false,
       }))).filter((image: any) => image.dataUrl && image.dataUrl.length <= 350_000);
-      const text = parsed.text || "";
+      const text = (parsed.text || "").replace(/[\u200B\uFEFF]/g, "");
       return { name, mimeType: "application/pdf", text, simplified: text, images, expectationRows: [], bytes };
     } finally {
       await parser.destroy();
@@ -163,28 +163,70 @@ export async function parseUploadedFile(file: File): Promise<ParsedSource> {
   throw new Error(`${name}: Nur PDF- und DOCX-Dateien werden unterstützt.`);
 }
 
+function taskNumberFromHeading(raw: string) {
+  const normal = raw.replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, (c) => String("①②③④⑤⑥⑦⑧⑨⑩".indexOf(c) + 1));
+  const match = normal.match(/^\s*(?:Aufgabe\s*)?(\d{1,2})\b/i);
+  return match?.[1] || "";
+}
+
 function cleanTaskHeading(raw: string) {
   return raw
-    .replace(/^\s*(?:Aufgabe\s*)?\d+[\s.:)\-–]*/i, "")
-    .replace(/\s*\((?:\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*)(?:\s*(?:P\.?|BE))?\)\s*$/i, "")
+    .replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, (c) => String("①②③④⑤⑥⑦⑧⑨⑩".indexOf(c) + 1))
+    .replace(/^\s*(?:Aufgabe\s*)?\d{1,2}\s*[:.)\-–]?\s*/i, "")
+    .replace(/^\s*\(\s*(?:je\s*)?\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*\s*(?:P\.?|BE)\s*\)\s*/i, "")
+    .replace(/\s*\(\s*\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*\s*(?:P\.?|BE)\s*\)\s*$/i, "")
     .replace(/\s+/g, " ")
     .trim();
 }
 
+function titleFromChunk(chunk: string, heading: string, taskNumber: string) {
+  const cleanedHeading = cleanTaskHeading(heading);
+  const cleanedChunk = cleanTaskHeading(chunk.replace(/\n+/g, " "));
+  const source = cleanedHeading.length >= 5 ? cleanedHeading : cleanedChunk;
+  const lower = source.toLowerCase();
+  const combinedLower = cleanedChunk.toLowerCase();
+
+  if (/magisch(?:es|en)?\s+quadrat/.test(combinedLower)) return "Magisches Quadrat";
+  if (/subtraktionsmauer/.test(combinedLower)) return "Subtraktionsmauer";
+  if (/gemischte aufgaben/.test(combinedLower)) return "Gemischte Aufgaben";
+  if (/ordne der größe nach/.test(combinedLower)) return "Zahlen der Größe nach ordnen";
+  if (/beträge/.test(combinedLower) && /ordne/.test(combinedLower)) return "Beträge ordnen";
+  if (/säulendiagramm/.test(combinedLower) && /boxplot/.test(combinedLower)) return "Säulendiagramm und Boxplot";
+  if (/boxplot/.test(combinedLower)) return "Boxplot";
+
+  const firstSentence = source.split(/(?<=[.!?])\s+/)[0]
+    .replace(/^(?:bei|ergänze|berechne|bestimme|ordne|gib|zeichne|untersuche|löse)\s+/i, "")
+    .trim();
+  if (firstSentence.length >= 4 && firstSentence.length <= 70) return firstSentence.replace(/[.:;!?]+$/, "");
+  if (firstSentence.length > 70) return `${firstSentence.slice(0, 67).trim()}…`;
+  return `Aufgabe ${taskNumber || ""}`.trim();
+}
+
 function pointsFromChunk(chunk: string, heading: string) {
-  const candidates = [heading, chunk.slice(0, 400)];
-  for (const value of candidates) {
-    const match = value.match(/\((\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*)\s*(?:P\.?|BE)?\)/i)
-      || value.match(/(\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*)\s*(?:P\.|BE)\b/i);
-    if (match) return match[1].replace(/\s+/g, "");
+  const normalized = chunk.replace(/\r/g, "");
+  const lineMarkers = Array.from(normalized.matchAll(/(?:^|\n)\s*(?:Aufgabe\s*)?\d{0,2}\s*[:.)\-–]?\s*\(\s*(je\s*)?(\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*)\s*(?:P\.?|BE)\s*\)/gi));
+  const markers = lineMarkers.map((m) => ({ each: Boolean(m[1]), raw: m[2].replace(/\s+/g, "") }));
+
+  if (markers.length) {
+    const first = markers[0];
+    if (first.each && !first.raw.includes("+")) {
+      const count = new Set(Array.from(chunk.matchAll(/^[\s\u200B\uFEFF]*[*]?([a-z])\)\s*/gim)).map((m) => m[1].toLowerCase())).size;
+      if (count > 1) return Array.from({ length: count }, () => first.raw).join("+");
+    }
+    // A later line such as "(6 P.) ..." usually denotes another subpart of the same numbered task.
+    // Keep all such point blocks so task 4 in the sample becomes 6+6 and task 5 becomes 3+10.
+    return markers.map((m) => m.raw).join("+");
   }
-  return "";
+
+  const inline = normalized.match(/\((\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*)\s*(?:P\.?|BE)?\)/i)
+    || normalized.match(/(\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*)\s*(?:P\.|BE)\b/i);
+  return inline ? inline[1].replace(/\s+/g, "") : "";
 }
 
 function topicScores(text: string, classLevel: string) {
   const keywords: Record<string, string[]> = {
     "Terme": ["term", "variable", "klammer", "ausmultipl", "zusammenfass"],
-    "Rationale Zahlen": ["rational", "negative zahl", "zahlengerade", "bruch", "dezimal", "vorzeichen"],
+    "Rationale Zahlen": ["rational", "negative zahl", "zahlengerade", "bruch", "dezimal", "vorzeichen", "betrag"],
     "Gleichungen": ["gleichung", "äquivalenz", "variable", "lösen"],
     "Prozentrechnung": ["prozent", "grundwert", "prozentwert", "prozentsatz", "rabatt"],
     "Zuordnung": ["zuordnung", "proportional", "dreisatz", "tabelle"],
@@ -192,7 +234,7 @@ function topicScores(text: string, classLevel: string) {
     "Prozent- und Zinsrechnung": ["prozent", "zins", "kapital", "rabatt", "wachstumsfaktor"],
     "Flächen": ["fläche", "flächeninhalt", "umfang", "dreieck", "viereck", "kreis"],
     "Körper": ["volumen", "oberfläche", "prisma", "zylinder", "körper"],
-    "Statistik": ["median", "mittelwert", "boxplot", "histogramm", "daten", "diagramm"],
+    "Statistik": ["median", "mittelwert", "boxplot", "histogramm", "daten", "diagramm", "säulendiagramm"],
     "Funktionen": ["funktion", "graph", "steigung", "y-achse", "koordinatensystem"],
     "Gleichungssysteme": ["gleichungssystem", "lgs", "einsetz", "additionsverfahren", "zwei gleichungen"],
     "Lineare Funktionen": ["linear", "steigung", "y-achsenabschnitt", "funktionsgleichung", "gerade"],
@@ -202,7 +244,7 @@ function topicScores(text: string, classLevel: string) {
     "Quadratische Funktionen": ["quadratisch", "parabel", "scheitel", "nullstelle", "binom"],
     "Exponentialfunktionen": ["exponential", "wachstum", "zerfall", "wachstumsfaktor", "halbwert"],
     "Trigonometrie": ["sinus", "kosinus", "tangens", "trigonom", "winkel"],
-    "Wahrscheinlichkeitsrechnung": ["wahrscheinlichkeit", "baumdiagramm", "urne", "ereignis", "vierfelder", "zufall"],
+    "Wahrscheinlichkeitsrechnung": ["wahrscheinlichkeit", "baumdiagramm", "urne", "ereignis", "vierfelder", "zufall", "boxplot"],
   };
   const lower = text.toLowerCase();
   return (LEGACY_TOPICS_BY_CLASS[classLevel] || []).map((topic) => ({
@@ -228,7 +270,7 @@ function guessCompetence(text: string): Competence {
   if (/begründe|beweise|widerlege|beurteile|bewerte|argument|analysiere.+aussage/.test(lower)) return "Argumentieren";
   if (/problem|strategie|systematisch probier|finde (?:alle|einen weg)|untersuche verschiedene lösungswege/.test(lower)) return "Problemlösen";
   if (/sachverhalt|alltag|real(?:e|en)? situation|modell|interpretiere.+kontext|architekt|fahrstuhl|geschwindigkeit|kosten/.test(lower)) return "Modellieren";
-  if (/zeichne|skizziere|stelle dar|diagramm|graph|koordinatensystem|zahlengerade|tabelle|darstellung/.test(lower)) return "Darstellungen";
+  if (/zeichne|skizziere|stelle dar|diagramm|graph|koordinatensystem|zahlengerade|tabelle|darstellung|boxplot/.test(lower)) return "Darstellungen";
   if (/erkläre|beschreibe|erläutere|formuliere|präsentiere|kommuniz/.test(lower)) return "Kommunizieren";
   return "Mathematik";
 }
@@ -241,20 +283,40 @@ function guessAfb(text: string) {
 }
 
 function estimatedTime(points: number, text: string) {
-  const partCount = (text.match(/^\s*[*]?[a-z]\)/gim) || []).length;
+  const partCount = (text.match(/^\s*[*]?[a-z]\)\s*/gim) || []).length;
   return Math.max(2, Math.round((points > 0 ? points * 1.8 : 4) + Math.max(0, partCount - 1)));
 }
 
+function normalizeCircledNumbers(value: string) {
+  const chars = "①②③④⑤⑥⑦⑧⑨⑩";
+  return value.replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, (c) => String(chars.indexOf(c) + 1));
+}
+
+function isTaskStartLine(line: string) {
+  const value = normalizeCircledNumbers(line).trim();
+  if (/^Aufgabe\s*\d{1,2}\s*[:.)\-–]?/i.test(value)) return true;
+  // Common worksheet/PDF layout: "1    (7 P.) ..." or "3 (Je 2 P.) ...".
+  // Requiring the point marker avoids misreading headings such as "4. Klassenarbeit" as task 4.
+  if (/^\d{1,2}\s*[:.)\-–]?\s*\(\s*(?:je\s*)?\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*\s*(?:P\.?|BE)\s*\)/i.test(value)) return true;
+  return false;
+}
+
 function taskChunks(text: string) {
-  const lines = text.replace(/\r/g, "").split("\n");
+  const lines = normalizeCircledNumbers(text).replace(/\r/g, "").split("\n");
   const starts: number[] = [];
-  const strong = /^\s*Aufgabe\s*\d+\s*[:.)\-–]/i;
-  const numeric = /^\s*\d+\s*[.)]\s+\S/;
-  for (let i = 0; i < lines.length; i++) {
-    if (strong.test(lines[i]) || (starts.length === 0 && numeric.test(lines[i]))) starts.push(i);
-  }
+  for (let i = 0; i < lines.length; i++) if (isTaskStartLine(lines[i])) starts.push(i);
   if (!starts.length) return [];
-  return starts.map((start, index) => lines.slice(start, starts[index + 1] ?? lines.length).join("\n").trim()).filter(Boolean);
+  return starts
+    .map((start, index) => lines.slice(start, starts[index + 1] ?? lines.length).join("\n").trim())
+    .map((chunk) => chunk
+      // Remove recurring page footer/header debris that otherwise becomes part of the final task.
+      .replace(/^\s*Mathematik\s+.*Seite\s+\d+\/\d+\s*$/gim, "")
+      .replace(/^\s*Angaben zu den Urhebern.*$/gim, "")
+      .replace(/^\s*https?:\/\/www\.tutory\.de\/.*$/gim, "")
+      .replace(/^\s*Name:\s+.*$/gim, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim())
+    .filter(Boolean);
 }
 
 function stripImageMarkers(text: string) {
@@ -271,12 +333,19 @@ export function heuristicDrafts(sources: ParsedSource[], defaultClass?: string, 
       const { text, indices } = stripImageMarkers(chunk);
       const bodyLines = text.split("\n");
       const heading = bodyLines.shift() || firstLine;
+      const taskNumber = taskNumberFromHeading(heading);
       const pointsRaw = pointsFromChunk(text, heading);
       const maxPoints = parsePointsSpec(pointsRaw).maxPoints || 0;
       const classLevel = guessClass(`${source.name}\n${text}`, defaultClass);
       const topic = guessTopic(`${source.name}\n${text}`, classLevel, defaultTopic);
-      const title = cleanTaskHeading(heading) || `Aufgabe ${drafts.length + 1}`;
-      const questionText = bodyLines.join("\n").trim() || text.trim();
+      const title = titleFromChunk(text, heading, taskNumber) || `Aufgabe ${taskNumber || drafts.length + 1}`;
+      const cleanedFirstLine = cleanTaskHeading(heading);
+      const explicitHeading = /^\s*Aufgabe\s*\d+/i.test(heading);
+      const questionText = ([explicitHeading ? "" : cleanedFirstLine, ...bodyLines].join("\n")
+        .replace(/(?:^|\n)\s*\(\s*(?:je\s*)?\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*\s*(?:P\.?|BE)\s*\)\s*/gi, "\n")
+        .replace(/^\s+|\s+$/g, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim()) || cleanTaskHeading(text);
       const imageIndex = indices.find((i) => source.images[i] && !source.images[i].decorative);
       const visualHint = /zeichne|skizziere|abbild|diagramm|zahlengerade|koordinatensystem|graph|bild/i.test(`${title} ${questionText}`);
       const foundImage = Number.isInteger(imageIndex)

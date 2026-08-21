@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isAdminRequest } from "@/lib/adminAuth";
 import { addDuplicateCandidates } from "@/lib/duplicateCheck";
 import { heuristicDrafts, parseUploadedFile } from "@/lib/importParsing";
-import { analyzeWithLlm, llmConfigured } from "@/lib/llmAnalysis";
+import { llmConfigured } from "@/lib/llmAnalysis";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
     const form = await request.formData();
     const files = form.getAll("files").filter((x): x is File => x instanceof File);
     if (!files.length) return NextResponse.json({ error: "Bitte mindestens eine PDF- oder DOCX-Datei auswählen." }, { status: 400 });
-    if (files.length > 8) return NextResponse.json({ error: "Bitte höchstens 8 Dateien gleichzeitig hochladen." }, { status: 400 });
+    if (files.length > 10) return NextResponse.json({ error: "Bitte höchstens 10 Dateien gleichzeitig hochladen." }, { status: 400 });
     const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
     // Vercel Functions accept at most 4.5 MB request bodies. Keep headroom for multipart metadata.
     if (totalBytes > 4 * 1024 * 1024) return NextResponse.json({ error: "Die ausgewählten Dateien sind zusammen größer als 4 MB. Vercel begrenzt Function-Uploads auf 4,5 MB. Bitte Dateien verkleinern oder in getrennten Importen verarbeiten." }, { status: 413 });
@@ -28,12 +28,9 @@ export async function POST(request: NextRequest) {
 
     if (useLlm) {
       const sparsePdf = sources.some((source) => source.mimeType === "application/pdf" && (source.text || "").trim().length < 400);
-      if (sparsePdf) warnings.push("Mindestens eine PDF enthält kaum auslesbaren Text. Groq GPT-OSS 120B verarbeitet hier nur den extrahierten Text; reine Scan-PDFs benötigen später eine OCR-/Vision-Erweiterung.");
+      if (sparsePdf) warnings.push("Mindestens eine PDF enthält kaum auslesbaren Text. Groq GPT-OSS verarbeitet hier nur den extrahierten Text; reine Scan-PDFs benötigen eine OCR-/Vision-Erweiterung.");
       if (!llmConfigured()) warnings.push("KI-Analyse wurde angefordert, aber GROQ_API_KEY ist nicht gesetzt. Heuristische Analyse verwendet.");
-      else {
-        try { drafts = await analyzeWithLlm(sources, drafts, classLevel, topic); }
-        catch (error) { warnings.push(`KI-Analyse ist fehlgeschlagen; heuristische Ergebnisse werden gezeigt. ${error instanceof Error ? error.message : String(error)}`); }
-      }
+      else if (drafts.length) warnings.push("Die Aufgaben wurden zuerst lokal getrennt. Die Groq-Analyse läuft anschließend aufgabenweise, damit das 8.000-TPM-Free-Tier nicht durch einen einzigen großen Request überschritten wird.");
     }
 
     if (!drafts.length) {
@@ -49,7 +46,8 @@ export async function POST(request: NextRequest) {
       drafts,
       warnings,
       sourceSummary: sources.map((s) => ({ name: s.name, characters: s.text.length, images: s.images.length })),
-      analysisMode: drafts.some((x) => x.analysisMode === "llm") ? "llm" : "heuristic",
+      analysisMode: "heuristic",
+      llmRequested: useLlm && llmConfigured(),
     });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });

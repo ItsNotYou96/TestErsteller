@@ -78,7 +78,7 @@ export default function AdminPage() {
   async function analyze() {
     if (!files.length) { setMessage("Bitte zuerst PDF- oder DOCX-Dateien auswählen."); return; }
     setBusy(true);
-    setMessage("Dokumente werden analysiert …");
+    setMessage("Dokumente werden ausgelesen und Aufgaben getrennt …");
     setWarnings([]);
     try {
       const form = new FormData();
@@ -89,13 +89,62 @@ export default function AdminPage() {
       const r = await fetch("/api/admin/import", { method: "POST", body: form });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || "Importanalyse fehlgeschlagen.");
-      setDrafts(data.drafts || []);
-      setSelectedId(data.drafts?.[0]?.id || "");
+
+      let working: ImportDraft[] = data.drafts || [];
+      setDrafts(working);
+      setSelectedId(working[0]?.id || "");
       setWarnings(data.warnings || []);
       setSourceSummary(data.sourceSummary || []);
-      setMessage(`${data.drafts?.length || 0} Aufgaben erkannt. Bitte Vorschläge prüfen.`);
+
+      if (data.llmRequested && working.length) {
+        const llmWarnings: string[] = [];
+        for (let i = 0; i < working.length; i++) {
+          setMessage(`${working.length} Aufgaben erkannt. Groq analysiert Aufgabe ${i + 1} von ${working.length}: ${working[i].title}`);
+          let completed = false;
+          for (let attempt = 0; attempt < 4 && !completed; attempt++) {
+            const rr = await fetch("/api/admin/analyze-task", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ draft: working[i], classLevel: defaultClass || undefined, topic: defaultTopic || undefined }),
+            });
+            const result = await rr.json().catch(() => ({}));
+            if (rr.ok && result.draft) {
+              working = working.map((draft, index) => index === i ? result.draft : draft);
+              setDrafts([...working]);
+              completed = true;
+              break;
+            }
+            if (rr.status === 429) {
+              const retrySeconds = Math.max(2, Number(result.retryAfterSeconds) || parseResetSeconds(result.resetTokens) || 8);
+              setMessage(`Groq-Free-Tier kurz ausgelastet. Warte ${Math.ceil(retrySeconds)} s, dann geht Aufgabe ${i + 1} automatisch weiter …`);
+              await sleep((retrySeconds + 0.5) * 1000);
+              continue;
+            }
+            llmWarnings.push(`${working[i].title}: ${result.error || `Groq HTTP ${rr.status}`}`);
+            completed = true; // Heuristische Werte für diese Aufgabe behalten.
+          }
+          if (!completed) llmWarnings.push(`${working[i].title}: Groq-Limit nach mehreren Versuchen weiterhin erreicht; Heuristik beibehalten.`);
+        }
+        if (llmWarnings.length) setWarnings((prev) => [...prev, `Einige Aufgaben konnten nicht per Groq verfeinert werden: ${llmWarnings.join(" | ")}`]);
+      }
+
+      const llmCount = working.filter((x) => x.analysisMode === "llm").length;
+      setMessage(`${working.length} Aufgaben erkannt${data.llmRequested ? ` · ${llmCount} per Groq verfeinert` : ""}. Bitte Vorschläge prüfen.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
+  }
+
+  function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function parseResetSeconds(value?: string) {
+    if (!value) return 0;
+    const ms = value.match(/([0-9.]+)ms/i);
+    if (ms) return Number(ms[1]) / 1000;
+    const sec = value.match(/([0-9.]+)s/i);
+    if (sec) return Number(sec[1]);
+    return 0;
   }
 
   function patchDraft(id: string, patch: Partial<ImportDraft>) {
