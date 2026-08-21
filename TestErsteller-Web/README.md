@@ -129,6 +129,12 @@ Der derzeitige Importverlauf wird lokal im Browser des Admins gespeichert; die e
 ### Groq Free-Tier import (v2.0)
 The importer first separates tasks locally. If Groq analysis is enabled, each task is then sent separately to `/api/admin/analyze-task`. This keeps each request small and lets the browser automatically pause/retry when the Groq free-tier token-per-minute window is temporarily exhausted.
 
-### PDF-Erkennung / OCR (v2.1)
+### Sichere PDF-/Mathe-Erkennung (v2.2)
 
-Der PDF-Importer erkennt jetzt auch nummerierte Aufgaben ohne Punkte in der Überschrift, z. B. `1. Drücke ...`, `2. Berechne ...`. Für PDFs mit defekter oder fehlender Textschicht gibt es im Adminbereich zusätzlich **PDF visuell lesen (OCR)**. Dafür wird derselbe `GROQ_API_KEY` verwendet; standardmäßig kommt `qwen/qwen3.6-27b` zum Einsatz. Optional kann das Modell mit `GROQ_VISION_MODEL` überschrieben werden. Die OCR läuft seitenweise, um das Groq-Free-Tier nicht mit einem großen Request zu überlasten.
+Die PDF-Textschicht ist ab v2.2 die verbindliche Quelle dafür, **welche Aufgaben existieren**. Die frühere vollständige Vision-OCR wurde entfernt, weil ein Vision-Modell ohne Textanker Inhalte halluzinieren kann. Der Schalter im Adminbereich heißt jetzt **Mathematik visuell korrigieren**: Groq/Qwen sieht die gerenderte Seite, darf aber ausschließlich mathematische Schreibweise (Brüche, Potenzen, Wurzeln, Rechenzeichen) innerhalb des bereits extrahierten Textes korrigieren.
+
+Jede visuelle Korrektur wird serverseitig verworfen, sobald Aufgabennummern, Teilaufgaben, Zahlenmenge, Prosa oder Textlänge unplausibel verändert werden. Bei Scan-PDFs ohne brauchbare Textschicht wird lieber gewarnt als eine nicht belegte Aufgabe erzeugt.
+
+Zusätzlich repariert der lokale PDF-Parser häufige einfache Fälle wie gestapelte Brüche (`3/4`) bereits ohne Groq. Komplexe Formelsätze werden nur mit der abgesicherten visuellen Korrektur nachgelesen.
+
+Die Duplikatprüfung berücksichtigt ab v2.2 echte Zahlen, Operatoren, mathematische Tokens, Prosa, Titel und Aufgabenstruktur getrennt. Eine Warnung erscheint erst ab ca. 74 %, automatisch abgewählt wird eine Aufgabe erst bei mindestens 96 % Ähnlichkeit.

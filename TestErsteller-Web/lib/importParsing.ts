@@ -15,6 +15,7 @@ export interface ParsedSource {
   simplified: string;
   images: Array<{ dataUrl: string; name: string; decorative?: boolean }>;
   expectationRows: Array<{ title: string; expectation: string; pointsRaw: string }>;
+  pages?: Array<{ pageNumber: number; text: string }>;
   bytes: Buffer;
 }
 
@@ -107,6 +108,53 @@ function htmlToSimplified(html: string) {
   );
 }
 
+
+function repairCommonPdfMathText(value: string) {
+  const normalized = value
+    .replace(/[⋅×]/g, " \\cdot ")
+    .replace(/÷/g, " \\div ")
+    .replace(/[−–—]/g, "-")
+    .replace(/[\u200B\uFEFF]/g, "");
+
+  const lines = normalized.replace(/\r/g, "").split("\n");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const next = lines[i + 1] || "";
+
+    // Typical PDF text layer for a displayed fraction: visual 3/4 x becomes
+    // "d) 4" + newline + "3 x..." (denominator emitted before numerator).
+    const labeledDen = line.match(/^(\s*\*?[a-z]\)\s*)(\d{1,3})\s*$/i);
+    const nextNumRest = next.match(/^\s*(\d{1,3})\s+(.+)$/);
+    if (labeledDen && nextNumRest && /[a-z=+\-*/:^()]/i.test(nextNumRest[2])) {
+      let rest = nextNumRest[2];
+      const nextAfter = lines[i + 2] || "";
+      const mixedDen = rest.match(/^(.*[=+\-*/:]\s*.*?)(\d{1,2})\s*$/);
+      const mixedNum = nextAfter.match(/^\s*(\d{1,2})\s*$/);
+      if (mixedDen && mixedNum && /\d/.test(mixedDen[1])) {
+        rest = `${mixedDen[1]}\\frac{${mixedNum[1]}}{${mixedDen[2]}}`;
+        i++;
+      }
+      out.push(`${labeledDen[1]}\\frac{${nextNumRest[1]}}{${labeledDen[2]}} ${rest}`.trimEnd());
+      i++;
+      continue;
+    }
+
+    // Mixed number at the end of a mathematical line, e.g. visual -5 1/2 may be emitted as
+    // "... = - 5 2" + newline + "1". Only apply when the line is clearly mathematical.
+    const trailingDen = line.match(/^(.*[=+\-*/:]\s*.*?)(\d{1,2})\s*$/);
+    const nextNumOnly = next.match(/^\s*(\d{1,2})\s*$/);
+    if (trailingDen && nextNumOnly && /\d/.test(trailingDen[1])) {
+      out.push(`${trailingDen[1]}\\frac{${nextNumOnly[1]}}{${trailingDen[2]}}`.trimEnd());
+      i++;
+      continue;
+    }
+
+    out.push(line);
+  }
+  return out.join("\n");
+}
+
 export async function parseUploadedFile(file: File): Promise<ParsedSource> {
   const bytes = Buffer.from(await file.arrayBuffer());
   const name = file.name || "Dokument";
@@ -146,15 +194,23 @@ export async function parseUploadedFile(file: File): Promise<ParsedSource> {
   if (ext === "pdf" || file.type === "application/pdf") {
     const parser = new PDFParse({ data: Uint8Array.from(bytes) });
     try {
-      const parsed = await parser.getText();
+      const initial = await parser.getText({ pageJoiner: "" });
+      const rawPages = Array.isArray((initial as any).pages) ? (initial as any).pages : [];
+      const pages: Array<{ pageNumber: number; text: string }> = rawPages.length
+        ? rawPages.map((page: any, index: number) => ({
+            pageNumber: Number(page.num || index + 1),
+            text: repairCommonPdfMathText(String(page.text || "")).trim(),
+          }))
+        : [{ pageNumber: 1, text: repairCommonPdfMathText(String(initial.text || "")).trim() }];
       const imageResult = await parser.getImage({ imageThreshold: 80, imageDataUrl: true, imageBuffer: false }).catch(() => undefined);
       const images = (imageResult?.pages || []).flatMap((page: any) => (page.images || []).map((image: any, index: number) => ({
         dataUrl: String(image.dataUrl || ""),
         name: `${name.replace(/\.pdf$/i, "")}-seite-${page.pageNumber || 1}-bild-${index + 1}.png`,
         decorative: false,
       }))).filter((image: any) => image.dataUrl && image.dataUrl.length <= 350_000);
-      const text = (parsed.text || "").replace(/[\u200B\uFEFF]/g, "");
-      return { name, mimeType: "application/pdf", text, simplified: text, images, expectationRows: [], bytes };
+      const text = pages.map((page) => page.text).filter(Boolean).join("\n\n");
+      const simplified = pages.map((page) => `[[PAGE:${page.pageNumber}]]\n${page.text}`).join("\n");
+      return { name, mimeType: "application/pdf", text, simplified, images, expectationRows: [], pages, bytes };
     } finally {
       await parser.destroy();
     }
@@ -309,21 +365,32 @@ function isTaskStartLine(line: string) {
 }
 
 function taskChunks(text: string) {
-  const lines = normalizeCircledNumbers(text).replace(/\r/g, "").split("\n");
+  const rawLines = normalizeCircledNumbers(text).replace(/\r/g, "").split("\n");
+  const lines: Array<{ text: string; page?: number }> = [];
+  let currentPage: number | undefined;
+  for (const raw of rawLines) {
+    const marker = raw.match(/^\s*\[\[PAGE:(\d+)\]\]\s*$/i);
+    if (marker) { currentPage = Number(marker[1]); continue; }
+    lines.push({ text: raw, page: currentPage });
+  }
+
   const starts: number[] = [];
-  for (let i = 0; i < lines.length; i++) if (isTaskStartLine(lines[i])) starts.push(i);
-  if (!starts.length) return [];
-  return starts
-    .map((start, index) => lines.slice(start, starts[index + 1] ?? lines.length).join("\n").trim())
-    .map((chunk) => chunk
+  for (let i = 0; i < lines.length; i++) if (isTaskStartLine(lines[i].text)) starts.push(i);
+  if (!starts.length) return [] as Array<{ text: string; pages: number[] }>;
+
+  return starts.map((start, index) => {
+    const slice = lines.slice(start, starts[index + 1] ?? lines.length);
+    const pages = Array.from(new Set(slice.map((line) => line.page).filter((page): page is number => Number.isInteger(page))));
+    const chunk = slice.map((line) => line.text).join("\n").trim()
       // Remove recurring page footer/header debris that otherwise becomes part of the final task.
       .replace(/^\s*Mathematik\s+.*Seite\s+\d+\/\d+\s*$/gim, "")
       .replace(/^\s*Angaben zu den Urhebern.*$/gim, "")
       .replace(/^\s*https?:\/\/www\.tutory\.de\/.*$/gim, "")
       .replace(/^\s*Name:\s+.*$/gim, "")
       .replace(/\n{3,}/g, "\n\n")
-      .trim())
-    .filter(Boolean);
+      .trim();
+    return { text: chunk, pages };
+  }).filter((chunk) => Boolean(chunk.text));
 }
 
 function stripImageMarkers(text: string) {
@@ -335,7 +402,8 @@ export function heuristicDrafts(sources: ParsedSource[], defaultClass?: string, 
   const drafts: ImportDraft[] = [];
   for (const source of sources) {
     const chunks = taskChunks(source.simplified || source.text);
-    for (const chunk of chunks) {
+    for (const chunkInfo of chunks) {
+      const chunk = chunkInfo.text;
       const firstLine = chunk.split("\n").find((x) => x.trim()) || "Aufgabe";
       const { text, indices } = stripImageMarkers(chunk);
       const bodyLines = text.split("\n");
@@ -377,6 +445,8 @@ export function heuristicDrafts(sources: ParsedSource[], defaultClass?: string, 
         imageName: image?.name,
         include: true,
         analysisMode: "heuristic",
+        sourcePages: chunkInfo.pages,
+        mathRepair: "none",
         confidence: { topic: 0.45, competence: 0.4, afb: 0.35, time: 0.45, expectation: 0 },
       });
     }

@@ -27,6 +27,8 @@ export interface ImportDraft {
   imageName?: string;
   include: boolean;
   analysisMode: "heuristic" | "llm";
+  sourcePages?: number[];
+  mathRepair?: "none" | "visual" | "rejected";
   duplicate?: DuplicateCandidate;
   confidence?: {
     topic: number;

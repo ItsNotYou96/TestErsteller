@@ -1,21 +1,46 @@
-# v2.1 validation
+# v2.2 validation
+
+## Anti-hallucination PDF flow
+
+- PDF text layer is authoritative for task boundaries.
+- Vision never creates new tasks when a trusted text skeleton exists.
+- Visual math correction is rejected if task numbers change, an original subtask disappears, numeric literals change, prose overlap falls below 78 %, or output length changes implausibly.
+- PDFs without a trusted text/task skeleton are not auto-converted into Groq-invented tasks.
+
+## Fraction handling
+
+- Normalizes common PDF multiplication/division glyphs to LaTeX-like notation.
+- Repairs the common line-broken fraction pattern where a visual `3/4 x` is emitted as `4` on one line and `3 x` on the next.
+- Also handles a mixed-number continuation after that common fraction pattern.
+- Complex multi-fraction layouts remain candidates for the guarded visual math correction rather than unsafe guessing.
+
+## Duplicate similarity
+
+- Numbers are no longer erased before comparison.
+- Score now combines literal tokens, prose tokens, character similarity, number-normalized structure, math tokens, title and exact number overlap.
+- Different number sets only reduce similarity when prose is not already strongly aligned, so "same task with changed values" can still be surfaced.
+- Candidate threshold: 74 %. Auto-exclusion threshold: 96 % (previously 86 %).
 
 ## PDF numbering regression
 
-Tested against both uploaded PDF layouts using their actual extracted text:
+The existing task-start rules remain unchanged for:
+- numbered worksheets without point values (`1. ...` through `10. ...`), and
+- worksheets with point blocks such as `1 (7 P.) ...`.
 
-- `Gleichungen-und-Terme (1).pdf`: detects exactly tasks 1-10 even though the headings contain no point values (`1. ...`, `2. ...`, ...).
-- `Klassenarbeit zu rationale Zahlen und Wahrscheinlichkeit - Teil 1.pdf`: still detects exactly tasks 1-5. A fraction/text fragment beginning with `3 ) ÷ ...` is not misclassified as a new task.
+## Build
 
-## Vision/OCR fallback
+Changed TS/TSX files are syntax-checked locally. Full Next.js integration build is still delegated to Vercel because npm registry installation is unavailable in this environment.
 
-- Normal PDF text extraction remains the default and does not consume Groq tokens.
-- When KI analysis is enabled and a PDF yields sparse text or no recognizable task blocks, the importer can automatically fall back to Groq vision OCR.
-- Admin can force the fallback with `PDF visuell lesen (OCR)`.
-- OCR uses `qwen/qwen3.6-27b` by default and sends one rendered PDF page per request to reduce Free-Tier TPM bursts.
-- Optional override: `GROQ_VISION_MODEL`.
+## Local regression probes
 
-## TypeScript syntax
+Anti-hallucination validator:
+- same tasks + `4\n3 x` repaired to `\\frac{3}{4}x` -> accepted;
+- added task number -> rejected;
+- added subtask -> rejected;
+- changed numeric literal -> rejected.
 
-Changed TS/TSX files were parsed with TypeScript `transpileModule`; no syntax diagnostics were reported.
-A complete Next.js build was not run locally because npm dependency installation is unavailable in this environment; Vercel remains the integration build.
+Duplicate score probes:
+- exact copy -> 1.000;
+- same substantive rectangle task with only side lengths changed -> ~0.837 (shown as similar, not auto-excluded);
+- generic equation instruction with different equations -> ~0.266 (not shown);
+- unrelated coordinate/statistics tasks -> ~0.116 (not shown).

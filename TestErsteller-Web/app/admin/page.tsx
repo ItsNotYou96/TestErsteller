@@ -256,13 +256,13 @@ export default function AdminPage() {
             <label>Klasse als Vorgabe<select value={defaultClass} onChange={(e) => setDefaultClass(e.target.value)}><option value="">Automatisch erkennen</option>{LEGACY_CLASSES.filter((x) => Number(x) <= 10).map((x) => <option key={x}>{x}</option>)}</select></label>
             <label>Thema als Vorgabe<select value={defaultTopic} onChange={(e) => setDefaultTopic(e.target.value)}><option value="">Automatisch erkennen</option>{(LEGACY_TOPICS_BY_CLASS[defaultClass] || []).map((x) => <option key={x}>{x}</option>)}</select></label>
             <label className="adminLlmToggle"><input type="checkbox" checked={useLlm} onChange={(e) => setUseLlm(e.target.checked)} disabled={!status.llmConfigured} /><span><b>KI-Analyse verwenden</b><small>{status.llmConfigured ? "Empfohlen für Kompetenz, AFB, Zeit und Erwartungshorizont. Dabei wird der extrahierte Aufgabentext an Groq gesendet." : "GROQ_API_KEY nicht gesetzt – heuristische Analyse bleibt verfügbar."}</small></span><Bot size={18} /></label>
-            <label className="adminLlmToggle"><input type="checkbox" checked={useVisionOcr} onChange={(e) => setUseVisionOcr(e.target.checked)} disabled={!status.llmConfigured} /><span><b>PDF visuell lesen (OCR)</b><small>{status.llmConfigured ? "Nur bei PDFs mit kaputtem/fehlendem Text nötig. Groq Qwen liest dann die gerenderten Seiten inklusive Formeln visuell nach." : "Benötigt denselben GROQ_API_KEY."}</small></span><FileSearch size={18} /></label>
+            <label className="adminLlmToggle"><input type="checkbox" checked={useVisionOcr} onChange={(e) => setUseVisionOcr(e.target.checked)} disabled={!status.llmConfigured} /><span><b>Mathematik visuell korrigieren</b><small>{status.llmConfigured ? "Sichere Variante: Die PDF-Textschicht bestimmt die Aufgaben. Groq darf nur Brüche, Potenzen und andere mathematische Zeichen innerhalb dieses vorhandenen Textes korrigieren." : "Benötigt denselben GROQ_API_KEY."}</small></span><FileSearch size={18} /></label>
             <button className="primary adminAnalyzeButton" disabled={busy || !files.length} onClick={() => void analyze()}>{busy ? <Loader2 className="spin" size={17} /> : <FileSearch size={17} />}Aufgaben erkennen</button>
           </div>
         </div>
         {message && <div className="adminMessage">{message}</div>}
         {warnings.map((warning, i) => <div className="adminWarning" key={i}><AlertTriangle size={16} />{warning}</div>)}
-        {sourceSummary.length > 0 && <div className="adminSourceSummary">{sourceSummary.map((x) => <span key={x.name}><b>{x.name}</b> · {x.characters.toLocaleString("de-DE")} Zeichen · {x.images} Bilder{x.method ? ` · ${x.method === "groq-vision" ? "visuell/OCR" : x.method === "pdf-text" ? "PDF-Text" : "DOCX"}` : ""}</span>)}</div>}
+        {sourceSummary.length > 0 && <div className="adminSourceSummary">{sourceSummary.map((x) => <span key={x.name}><b>{x.name}</b> · {x.characters.toLocaleString("de-DE")} Zeichen · {x.images} Bilder{x.method ? ` · ${x.method === "groq-math" ? "PDF-Text + Formelkorrektur" : x.method === "pdf-text" ? "PDF-Text" : "DOCX"}` : ""}</span>)}</div>}
       </section>
 
       {drafts.length > 0 && (
@@ -276,8 +276,8 @@ export default function AdminPage() {
               {drafts.map((draft, index) => (
                 <button key={draft.id} className={`adminDraftCard ${selected?.id === draft.id ? "active" : ""} ${!draft.include ? "excluded" : ""}`} onClick={() => setSelectedId(draft.id)}>
                   <span className="adminDraftIndex">{index + 1}</span>
-                  <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P. · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}</small></span>
-                  <span className="adminDraftBadges">{draft.duplicate && <em className={draft.duplicate.score >= .86 ? "danger" : "warn"}>{Math.round(draft.duplicate.score * 100)}% ähnlich</em>}{draft.include ? <Check size={16} /> : <X size={16} />}</span>
+                  <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P. · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}{draft.mathRepair === "visual" ? " · Mathe visuell korrigiert" : draft.mathRepair === "rejected" ? " · Mathe-Korrektur verworfen" : ""}</small></span>
+                  <span className="adminDraftBadges">{draft.duplicate && <em className={draft.duplicate.score >= .96 ? "danger" : "warn"}>{Math.round(draft.duplicate.score * 100)}% ähnlich</em>}{draft.include ? <Check size={16} /> : <X size={16} />}</span>
                 </button>
               ))}
             </aside>
@@ -290,7 +290,7 @@ export default function AdminPage() {
                 </div>
 
                 {selected.duplicate && (
-                  <section className={`adminDuplicate ${selected.duplicate.score >= .86 ? "high" : ""}`}>
+                  <section className={`adminDuplicate ${selected.duplicate.score >= .96 ? "high" : ""}`}>
                     <div><AlertTriangle size={18} /><strong>Mögliches Duplikat: {Math.round(selected.duplicate.score * 100)} % Ähnlichkeit</strong></div>
                     <p><b>Vorhanden:</b> {selected.duplicate.title} · {selected.duplicate.competence}</p>
                     <details><summary>Vorhandene Aufgabe vergleichen</summary><div className="adminExistingQuestion"><LatexText text={selected.duplicate.questionText} /></div></details>
