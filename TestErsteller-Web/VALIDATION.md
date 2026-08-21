@@ -101,3 +101,17 @@ Prüfung:
 - Stattdessen öffnet `Reihenfolge bearbeiten` einen eigenen großen Sortierdialog.
 - Der Sortierdialog zeigt Titel, Kompetenz, Punkte, AFB, Zeit, vollständigen Aufgabentext (inkl. LaTeX), optional das Aufgabenbild und die Extrablatt-Option.
 - Hoch/Runter ändert weiterhin direkt `selectedOrder`; Export und Erwartungshorizont verwenden diese Reihenfolge.
+
+## v1.8 Admin-Import
+
+- Neuer geschützter Bereich `/admin` mit serverseitig signierter 8-Stunden-Session (`ADMIN_CODE`, optional `ADMIN_SESSION_SECRET`).
+- PDF/DOCX-Analyse: DOCX über Mammoth + zusätzliche OMML-Textgewinnung, PDF über `pdf-parse` 2.x.
+- Heuristische Aufgabentrennung erkennt beim vorhandenen WPF-Beispiel `Klassenarbeit.docx` alle 6 Überschriften (`Aufgabe 1` bis `Aufgabe 6`).
+- Erwartungshorizont-Tabellen aus DOCX werden anhand des Aufgabentitels zugeordnet, soweit die Tabellenstruktur `Aufgabe | Erwartungshorizont | Punkte` erkennbar ist.
+- Optionaler LLM-Pfad über die OpenAI Responses API mit Structured Outputs; ohne `OPENAI_API_KEY` bleibt der komplette Prüf-/Notion-Workflow nutzbar.
+- Duplikatprüfung nutzt normalisierte Token-Jaccard- und Trigram-Dice-Ähnlichkeit gegen die vorhandenen Aufgaben des vorgeschlagenen Klasse/Thema-Paars.
+- Finaler Import wird pro Aufgabe einzeln an `/api/admin/commit` geschickt, damit Bilder nicht gemeinsam das Vercel-Requestlimit überschreiten.
+- Notion-Ziel wird aus dem originalen WPF-Mapping Klasse → Thema → Kompetenz gewählt; Page-Properties werden anhand des tatsächlichen Data-Source-Schemas geschrieben.
+- Notion-Dateiupload für Aufgabenbilder implementiert; Integration benötigt `Insert content`.
+- Alle TypeScript/TSX-Dateien mit dem TypeScript-Compiler syntaktisch transpiliert: 0 Syntaxdiagnosen.
+- Vollständiger `npm install`/`next build` konnte in der Containerumgebung nicht abgeschlossen werden, da der Registry-Zugriff innerhalb des Zeitlimits nicht fertig wurde. Der vollständige Integrationsbuild erfolgt daher beim Vercel-Deployment.

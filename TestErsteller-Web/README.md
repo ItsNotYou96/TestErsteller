@@ -109,3 +109,19 @@ Aus der veröffentlichten WPF-App wurde die eingebettete .NET-Assembly ausgelese
 - Kompetenzreihenfolge K1 Argumentieren, K2 Problemlösen, K3 Modellieren, K4 Darstellungen, K5 mathematische Werkzeuge/Mathematik, K6 Kommunizieren
 
 Der geheime Notion-Token bleibt weiterhin ausschließlich in Vercel bzw. `.env.local` und ist nicht im Web-Quellcode enthalten.
+
+## Admin-Aufgabenimport
+
+Unter `/admin` gibt es einen geschützten Importbereich für PDF/DOCX. Der Workflow ist:
+
+1. Admin-Code eingeben (`ADMIN_CODE` in Vercel).
+2. Eine oder mehrere PDF-/DOCX-Dateien hochladen (z. B. Klassenarbeit + Erwartungshorizont).
+3. Aufgaben automatisch erkennen und Metadaten prüfen/bearbeiten.
+4. Ähnlichkeitswarnungen gegen bereits vorhandene Aufgaben prüfen.
+5. Nur markierte Aufgaben final in die passende WPF/Notion-Datenbank schreiben.
+
+Der Import kann ohne LLM arbeiten. Für bessere automatische Zuordnung von Thema, Kompetenz, AFB, Zeit und Erwartungshorizont kann serverseitig `OPENAI_API_KEY` gesetzt werden. Das Modell ist über `OPENAI_MODEL` konfigurierbar.
+
+Für das tatsächliche Schreiben nach Notion benötigt die bestehende Integration neben Leserechten auch **Insert content**. Bilder aus DOCX werden, soweit sie einer Aufgabe zugeordnet werden können, als Notion-Dateiupload gespeichert. Bei PDFs kann ein Aufgabenbild in der Prüfansicht manuell ergänzt werden.
+
+Der derzeitige Importverlauf wird lokal im Browser des Admins gespeichert; die eigentlichen Aufgaben landen weiterhin ausschließlich in Notion.

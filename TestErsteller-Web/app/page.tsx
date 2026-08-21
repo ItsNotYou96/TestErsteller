@@ -201,9 +201,12 @@ export default function Home() {
           <h1>TestErsteller</h1>
           <p>Mathematik · Web-Version</p>
         </div>
-        <div className="status" title={message}>
-          <span className={connected === true ? "dot ok" : connected === false ? "dot bad" : "dot"} />
-          <span>{message}</span>
+        <div className="appHeaderRight">
+          <a href="/admin" className="adminNavLink">Admin</a>
+          <div className="status" title={message}>
+            <span className={connected === true ? "dot ok" : connected === false ? "dot bad" : "dot"} />
+            <span>{message}</span>
+          </div>
         </div>
       </header>
 
