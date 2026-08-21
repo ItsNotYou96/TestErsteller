@@ -28,10 +28,11 @@ export default function AdminPage() {
   const [defaultClass, setDefaultClass] = useState("7");
   const [defaultTopic, setDefaultTopic] = useState("");
   const [useLlm, setUseLlm] = useState(true);
+  const [useVisionOcr, setUseVisionOcr] = useState(false);
   const [drafts, setDrafts] = useState<ImportDraft[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [sourceSummary, setSourceSummary] = useState<Array<{ name: string; characters: number; images: number }>>([]);
+  const [sourceSummary, setSourceSummary] = useState<Array<{ name: string; characters: number; images: number; method?: string }>>([]);
   const [history, setHistory] = useState<ImportHistoryEntry[]>([]);
 
   useEffect(() => {
@@ -86,6 +87,7 @@ export default function AdminPage() {
       if (defaultClass) form.append("classLevel", defaultClass);
       if (defaultTopic) form.append("topic", defaultTopic);
       form.append("useLlm", String(useLlm));
+      form.append("useVisionOcr", String(useVisionOcr));
       const r = await fetch("/api/admin/import", { method: "POST", body: form });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || "Importanalyse fehlgeschlagen.");
@@ -253,13 +255,14 @@ export default function AdminPage() {
           <div className="adminContextFields">
             <label>Klasse als Vorgabe<select value={defaultClass} onChange={(e) => setDefaultClass(e.target.value)}><option value="">Automatisch erkennen</option>{LEGACY_CLASSES.filter((x) => Number(x) <= 10).map((x) => <option key={x}>{x}</option>)}</select></label>
             <label>Thema als Vorgabe<select value={defaultTopic} onChange={(e) => setDefaultTopic(e.target.value)}><option value="">Automatisch erkennen</option>{(LEGACY_TOPICS_BY_CLASS[defaultClass] || []).map((x) => <option key={x}>{x}</option>)}</select></label>
-            <label className="adminLlmToggle"><input type="checkbox" checked={useLlm} onChange={(e) => setUseLlm(e.target.checked)} disabled={!status.llmConfigured} /><span><b>KI-Analyse verwenden</b><small>{status.llmConfigured ? "Empfohlen für Kompetenz, AFB, Zeit und Erwartungshorizont. Dabei wird der extrahierte Dokumenttext an Groq gesendet." : "GROQ_API_KEY nicht gesetzt – heuristische Analyse bleibt verfügbar."}</small></span><Bot size={18} /></label>
+            <label className="adminLlmToggle"><input type="checkbox" checked={useLlm} onChange={(e) => setUseLlm(e.target.checked)} disabled={!status.llmConfigured} /><span><b>KI-Analyse verwenden</b><small>{status.llmConfigured ? "Empfohlen für Kompetenz, AFB, Zeit und Erwartungshorizont. Dabei wird der extrahierte Aufgabentext an Groq gesendet." : "GROQ_API_KEY nicht gesetzt – heuristische Analyse bleibt verfügbar."}</small></span><Bot size={18} /></label>
+            <label className="adminLlmToggle"><input type="checkbox" checked={useVisionOcr} onChange={(e) => setUseVisionOcr(e.target.checked)} disabled={!status.llmConfigured} /><span><b>PDF visuell lesen (OCR)</b><small>{status.llmConfigured ? "Nur bei PDFs mit kaputtem/fehlendem Text nötig. Groq Qwen liest dann die gerenderten Seiten inklusive Formeln visuell nach." : "Benötigt denselben GROQ_API_KEY."}</small></span><FileSearch size={18} /></label>
             <button className="primary adminAnalyzeButton" disabled={busy || !files.length} onClick={() => void analyze()}>{busy ? <Loader2 className="spin" size={17} /> : <FileSearch size={17} />}Aufgaben erkennen</button>
           </div>
         </div>
         {message && <div className="adminMessage">{message}</div>}
         {warnings.map((warning, i) => <div className="adminWarning" key={i}><AlertTriangle size={16} />{warning}</div>)}
-        {sourceSummary.length > 0 && <div className="adminSourceSummary">{sourceSummary.map((x) => <span key={x.name}><b>{x.name}</b> · {x.characters.toLocaleString("de-DE")} Zeichen · {x.images} Bilder</span>)}</div>}
+        {sourceSummary.length > 0 && <div className="adminSourceSummary">{sourceSummary.map((x) => <span key={x.name}><b>{x.name}</b> · {x.characters.toLocaleString("de-DE")} Zeichen · {x.images} Bilder{x.method ? ` · ${x.method === "groq-vision" ? "visuell/OCR" : x.method === "pdf-text" ? "PDF-Text" : "DOCX"}` : ""}</span>)}</div>}
       </section>
 
       {drafts.length > 0 && (

@@ -295,9 +295,16 @@ function normalizeCircledNumbers(value: string) {
 function isTaskStartLine(line: string) {
   const value = normalizeCircledNumbers(line).trim();
   if (/^Aufgabe\s*\d{1,2}\s*[:.)\-–]?/i.test(value)) return true;
-  // Common worksheet/PDF layout: "1    (7 P.) ..." or "3 (Je 2 P.) ...".
-  // Requiring the point marker avoids misreading headings such as "4. Klassenarbeit" as task 4.
+
+  // Common worksheet/PDF layout: "1 (7 P.) ..." or "3 (Je 2 P.) ...".
   if (/^\d{1,2}\s*[:.)\-–]?\s*\(\s*(?:je\s*)?\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*\s*(?:P\.?|BE)\s*\)/i.test(value)) return true;
+
+  // Very common worksheets do not put points into the heading at all:
+  // "1. Drücke ...", "2. Berechne ...", "10. Von drei Brüdern ...".
+  // A whitespace after the punctuation prevents dates/decimals such as 25.02.2019.
+  // Exclusions protect headings such as "4. Klassenarbeit" from becoming a task.
+  if (/^\d{1,2}\s*[:.)]\s+(?!Klassenarbeit\b|Klausur\b|Test\b|Teil\b|Seite\b|Klasse\b|Jahrgang(?:sstufe)?\b)(?![÷×·+=<>−-])\S/i.test(value)) return true;
+
   return false;
 }
 

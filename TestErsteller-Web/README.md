@@ -128,3 +128,7 @@ Der derzeitige Importverlauf wird lokal im Browser des Admins gespeichert; die e
 
 ### Groq Free-Tier import (v2.0)
 The importer first separates tasks locally. If Groq analysis is enabled, each task is then sent separately to `/api/admin/analyze-task`. This keeps each request small and lets the browser automatically pause/retry when the Groq free-tier token-per-minute window is temporarily exhausted.
+
+### PDF-Erkennung / OCR (v2.1)
+
+Der PDF-Importer erkennt jetzt auch nummerierte Aufgaben ohne Punkte in der Überschrift, z. B. `1. Drücke ...`, `2. Berechne ...`. Für PDFs mit defekter oder fehlender Textschicht gibt es im Adminbereich zusätzlich **PDF visuell lesen (OCR)**. Dafür wird derselbe `GROQ_API_KEY` verwendet; standardmäßig kommt `qwen/qwen3.6-27b` zum Einsatz. Optional kann das Modell mit `GROQ_VISION_MODEL` überschrieben werden. Die OCR läuft seitenweise, um das Groq-Free-Tier nicht mit einem großen Request zu überlasten.
