@@ -274,6 +274,7 @@ function blankParagraph() {
 
 function studentCell(runs: TextRun[]) {
   return new TableCell({
+    verticalAlign: VerticalAlign.CENTER,
     children: [new Paragraph({ children: runs, spacing: { before: 0, after: 0 } })],
   });
 }
@@ -306,7 +307,7 @@ function parseFormPointSplit(metadata: TestMetadata) {
 async function legacyHeader(metadata: TestMetadata) {
   const logo = await legacyAsset("fro_icon.png");
   const left = new TableCell({
-    width: { size: 32, type: WidthType.PERCENTAGE },
+    width: { size: 30, type: WidthType.PERCENTAGE },
     children: [
       new Paragraph({ children: [verdanaRun("Fritz-Reuter-Oberschule")], spacing: { before: 0, after: 0, line: 200 } }),
       new Paragraph({ children: [verdanaRun(metadata.classLevel || "")], spacing: { before: 0, after: 0, line: 200 } }),
@@ -314,7 +315,7 @@ async function legacyHeader(metadata: TestMetadata) {
     ],
   });
   const center = new TableCell({
-    width: { size: 46, type: WidthType.PERCENTAGE },
+    width: { size: 38, type: WidthType.PERCENTAGE },
     children: [
       new Paragraph({
         alignment: AlignmentType.CENTER,
@@ -329,16 +330,16 @@ async function legacyHeader(metadata: TestMetadata) {
     ],
   });
   const logoCell = new TableCell({
-    width: { size: 6, type: WidthType.PERCENTAGE },
+    width: { size: 17, type: WidthType.PERCENTAGE },
     verticalAlign: VerticalAlign.CENTER,
     children: [new Paragraph({
       alignment: AlignmentType.CENTER,
-      children: logo ? [new ImageRun({ data: logo, transformation: { width: 132, height: 29 }, type: "png" })] : [],
+      children: logo ? [new ImageRun({ data: logo, transformation: { width: 100, height: 22 }, type: "png" })] : [],
       spacing: { before: 0, after: 0 },
     })],
   });
   const date = new TableCell({
-    width: { size: 24, type: WidthType.PERCENTAGE },
+    width: { size: 15, type: WidthType.PERCENTAGE },
     verticalAlign: VerticalAlign.CENTER,
     children: [new Paragraph({
       alignment: AlignmentType.RIGHT,
@@ -349,8 +350,9 @@ async function legacyHeader(metadata: TestMetadata) {
 
   return new Header({
     children: [new Table({
-      width: { size: 99.6, type: WidthType.PERCENTAGE },
-      layout: TableLayoutType.AUTOFIT,
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      layout: TableLayoutType.FIXED,
+      columnWidths: [2700, 3420, 1530, 1350],
       borders: {
         top: { style: BorderStyle.SINGLE, size: 8 },
         bottom: { style: BorderStyle.SINGLE, size: 8 },
@@ -367,7 +369,7 @@ async function legacyHeader(metadata: TestMetadata) {
 
 function studentOverview(tasks: TaskItem[], metadata: TestMetadata) {
   const rows: TableRow[] = [
-    new TableRow({ children: [
+    new TableRow({ height: { value: 400, rule: HeightRule.ATLEAST }, children: [
       underlinedLabelCell("Vorname"),
       underlinedLabelCell("Name"),
       studentCell([
@@ -383,19 +385,19 @@ function studentOverview(tasks: TaskItem[], metadata: TestMetadata) {
       const task = tasks[i + j];
       cells.push(task ? scoreCell(`Aufgabe ${i + j + 1}`, task.maxPoints) : studentCell([aptosRun("", { size: 20 })]));
     }
-    rows.push(new TableRow({ children: cells }));
+    rows.push(new TableRow({ height: { value: 400, rule: HeightRule.ATLEAST }, children: cells }));
   }
 
   const form = parseFormPointSplit(metadata);
   if (form.total > 0) {
-    rows.push(new TableRow({ children: [
+    rows.push(new TableRow({ height: { value: 620, rule: HeightRule.ATLEAST }, children: [
       underlinedLabelCell("Sprache", `_____/ ${form.language} BE`),
       underlinedLabelCell("Schriftbild", `_____/ ${form.handwriting} BE`),
       underlinedLabelCell("Mathematische Form", `_____/ ${form.mathForm} BE`),
     ] }));
   }
 
-  rows.push(new TableRow({ children: [
+  rows.push(new TableRow({ height: { value: 400, rule: HeightRule.ATLEAST }, children: [
     studentCell([
       aptosRun(` Punktzahl: ______/${totalPoints(tasks, metadata)} BE`, { size: 20 }),
       aptosRun("           ", { underline: true, size: 20 }),
@@ -406,9 +408,10 @@ function studentOverview(tasks: TaskItem[], metadata: TestMetadata) {
 
   return new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
-    layout: TableLayoutType.AUTOFIT,
+    layout: TableLayoutType.FIXED,
+    columnWidths: [3000, 3000, 3000],
     borders: allBorders,
-    margins: { top: 40, bottom: 40, left: 120, right: 120 },
+    margins: { top: 55, bottom: 55, left: 120, right: 120 },
     rows,
   });
 }

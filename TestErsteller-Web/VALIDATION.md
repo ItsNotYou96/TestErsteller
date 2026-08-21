@@ -76,3 +76,10 @@ Prüfung:
 - TypeScript/TSX-Syntax mit TypeScript 5.8.3 erfolgreich geparst.
 - Die verwendeten docx-API-Elemente (Header, TableLayoutType, HeightRule, UnderlineType, VerticalAlign, BorderStyle) wurden gegen die aktuelle docx-API-Dokumentation abgeglichen.
 - Ein vollständiger `next build` ist in dieser Sandbox weiterhin nicht möglich, da die npm-Abhängigkeiten hier nicht vollständig installiert sind; Vercel führt den vollständigen Build beim Deployment aus.
+
+## v1.5 layout adjustment
+- Header table now uses fixed column proportions so the title sits closer to the center of the full header.
+- FRO logo is rendered at 100×22 px, matching the size embedded in the reference WPF DOCX more closely.
+- The school name has more reliable single-line space in the fixed header layout.
+- Student scoring table uses three fixed equal columns and taller rows; the form-points row gets extra height for "Mathematische Form".
+- Student table text is vertically centered within the larger cells.
