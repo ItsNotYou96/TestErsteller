@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, CheckCircle2, Database, FileDown, Loader2, RefreshCw } from "lucide-react";
 import type { Afb, Competence, TaskItem, TestMetadata } from "@/lib/types";
 import { sumAfb, totalAfb } from "@/lib/scoring";
+import { LatexText } from "@/components/LatexText";
 
 const competences: Competence[] = ["Argumentieren", "Problemlösen", "Modellieren", "Darstellungen", "Mathematik", "Kommunizieren"];
 const afbs: Afb[] = ["AFB1", "AFB2", "AFB3"];
@@ -159,9 +160,7 @@ export default function Home() {
   const totalPoints = selectedTasks.reduce((sum, task) => sum + task.maxPoints, 0);
   const totalTime = selectedTasks.reduce((sum, task) => sum + task.estimatedTime, 0);
   const mandatoryTotals = totalAfb(selectedTasks, "mandatory");
-  const optimizedTotals = totalAfb(selectedTasks, "optimized");
   const mandatoryTotalPoints = sumAfb(mandatoryTotals);
-  const optimizedTotalPoints = sumAfb(optimizedTotals);
   const competenceTotals = Object.fromEntries(
     competences.map((c) => [c, selectedTasks.filter((t) => t.competence === c).reduce((sum, task) => sum + task.maxPoints, 0)]),
   ) as Record<Competence, number>;
@@ -283,7 +282,7 @@ export default function Home() {
                                   />
                                 </span>
                               )}
-                              <span className="taskQuestion">{task.questionText || "Kein Aufgabentext hinterlegt."}</span>
+                              <div className="taskQuestion"><LatexText text={task.questionText || "Kein Aufgabentext hinterlegt."} /></div>
                               <span className="taskFacts">
                                 {orderIndex >= 0 && <span>Nr. {orderIndex + 1}</span>}
                                 <span><b>Punkte:</b> {task.maxPoints}</span>
@@ -313,15 +312,8 @@ export default function Home() {
           </section>
 
           <DistributionTable
-            title="AFB-Verteilung · Pflicht"
-            hint="Sternchen-Teilaufgaben ausgeschlossen"
+            title="AFB-Verteilung"
             rows={afbs.map((a) => ({ label: a, points: mandatoryTotals[a], share: percent(mandatoryTotals[a], mandatoryTotalPoints) }))}
-          />
-
-          <DistributionTable
-            title="AFB-Verteilung · Sternchen"
-            hint="Sternchen zuerst, danach normale Teilaufgaben bis MaxPoints"
-            rows={afbs.map((a) => ({ label: a, points: optimizedTotals[a], share: percent(optimizedTotals[a], optimizedTotalPoints) }))}
           />
 
           <DistributionTable
@@ -375,7 +367,7 @@ export default function Home() {
                     <span className="orderNumber">{index + 1}</span>
                     <div className="orderText">
                       <strong>{task.title || "Aufgabe"}</strong>
-                      <span>{competenceShort[task.competence]} {task.competence} · {task.maxPoints} P · {taskAfbDisplay(task)} · {task.estimatedTime || 0} min</span>
+                      <span>{competenceShort[task.competence]} {task.competence} · {task.maxPoints} P · {taskAfbDisplay(task)} · {task.estimatedTime > 0 ? `${task.estimatedTime} min` : "Zeit –"}</span>
                       <label className="extraSheetToggle">
                         <input
                           type="checkbox"

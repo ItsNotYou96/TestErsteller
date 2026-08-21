@@ -34,16 +34,40 @@ function plainText(property: any): string {
   }
   if (property.type === "select" || property.select) return property.select?.name ?? "";
   if (property.type === "multi_select" || property.multi_select) return (property.multi_select || []).map((x: any) => x.name).join(", ");
+  if (property.type === "status" || property.status) return property.status?.name ?? "";
   if (property.type === "number" || Object.prototype.hasOwnProperty.call(property, "number")) return property.number == null ? "" : String(property.number);
   if (property.type === "formula" || property.formula) return String(property.formula?.string ?? property.formula?.number ?? property.formula?.boolean ?? "");
+  if (property.type === "rollup" || property.rollup) {
+    if (typeof property.rollup?.number === "number") return String(property.rollup.number);
+    if (property.rollup?.type === "array") return (property.rollup.array || []).map((x: any) => plainText(x)).filter(Boolean).join(", ");
+  }
   return "";
 }
 
 function numberValue(property: any): number {
   if (!property) return 0;
   if (typeof property.number === "number") return property.number;
-  const n = Number(plainText(property).replace(",", "."));
-  return Number.isFinite(n) ? n : 0;
+  if (typeof property.formula?.number === "number") return property.formula.number;
+  if (typeof property.rollup?.number === "number") return property.rollup.number;
+
+  // Die WPF-Datenbank verwendet die Eigenschaft „Zeit“. Je nach älterem
+  // Datenbankstand kann sie als Zahl, Text oder Auswahl wie „10 min“ vorliegen.
+  // Deshalb nicht Number("10 min") verwenden, sondern die erste Zahl robust
+  // aus dem dargestellten Wert lesen.
+  const candidates = [
+    plainText(property),
+    property.select?.name,
+    property.status?.name,
+    property.formula?.string,
+  ].filter((value): value is string => typeof value === "string");
+
+  for (const raw of candidates) {
+    const match = raw.replace(/\s+/g, " ").match(/-?\d+(?:[.,]\d+)?/);
+    if (!match) continue;
+    const n = Number(match[0].replace(",", "."));
+    if (Number.isFinite(n)) return n;
+  }
+  return 0;
 }
 
 function filesUrl(property: any): string | undefined {
@@ -111,7 +135,7 @@ function parsePage(
   const topicFromPage = plainText(propertyByNames(props, ["Thema", "Topic"]));
   const classFromPage = plainText(propertyByNames(props, ["Klasse", "Jahrgang", "Jahrgangsstufe"]));
   const expectation = plainText(propertyByNames(props, ["Erwartungshorizont", "Erwartung", "Expectation"]));
-  const estimatedTime = numberValue(propertyByNames(props, ["Zeit", "Bearbeitungszeit", "EstimatedTime", "Minuten"]));
+  const estimatedTime = numberValue(propertyByNames(props, ["Zeit", "Bearbeitungszeit", "Bearbeitungsdauer", "Zeitaufwand", "Dauer", "EstimatedTime", "Minuten"]));
   const imageUrl = filesUrl(propertyByNames(props, ["Bild", "Image", "Grafik"]));
 
   const subTasks = parseSubTasks(questionText, afbRaw, pointsRaw);

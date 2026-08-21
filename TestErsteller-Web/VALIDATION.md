@@ -83,3 +83,15 @@ Prüfung:
 - The school name has more reliable single-line space in the fixed header layout.
 - Student scoring table uses three fixed equal columns and taller rows; the form-points row gets extra height for "Mathematische Form".
 - Student table text is vertically centered within the larger cells.
+
+
+## v1.6 (2026-08-21)
+
+- Exportdialog auf bis zu 940 px verbreitert; Reihenfolgenliste auf mindestens 330 px Höhe vergrößert.
+- Zweite AFB-Tabelle (Sternchen-Variante) entfernt; rechts bleibt eine AFB-Verteilung.
+- Notion-Zeitparser erweitert: Number-, Formula-, Rollup-, Text-, Select- und Statuswerte werden unterstützt; aus Angaben wie `10 min` oder `12,5 Minuten` wird die numerische Zeit extrahiert.
+- Zusätzliche Aliasnamen für Zeit: `Bearbeitungsdauer`, `Zeitaufwand`, `Dauer`.
+- Aufgabenanzeige verwendet KaTeX. Die TeX-Erkennung orientiert sich am Muster der WPF-App und erkennt u. a. `$...$`, `$$...$$`, `\(...\)`, `\[...\]`, `\frac{...}{...}`, TeX-Befehle sowie Potenzen wie `x^2`.
+- Syntaxprüfung aller Dateien in `app`, `lib` und `components` mit TypeScript 5.8.3: keine Parserfehler.
+- Regression des Zahlen-Parsers separat geprüft: `10 min -> 10`, `12,5 Minuten -> 12.5`, `Zeit: 7 -> 7`.
+- Vollständiges `npm install` konnte in der Container-Umgebung wegen fehlendem Registry-Netzzugriff nicht abgeschlossen werden. Vercel installiert die neue `katex`-Abhängigkeit beim Deployment.

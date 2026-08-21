@@ -422,3 +422,32 @@ h2 { margin: 0; font-size: 15px; font-weight: 650; }
 @media (max-width: 520px) {
   .dialogFieldGrid { grid-template-columns: 1fr; }
 }
+
+/* v1.6: Größerer Exportdialog und besser nutzbare Reihenfolgenliste */
+.exportDialog {
+  width: min(940px, calc(100vw - 32px));
+  max-height: 94vh;
+}
+.orderList {
+  min-height: 330px;
+  max-height: 46vh;
+  padding: 8px;
+}
+.orderItem {
+  min-height: 68px;
+  padding: 10px;
+}
+.orderText strong { font-size: 12px; }
+.orderText span { font-size: 10px; line-height: 1.35; }
+
+/* LaTeX-Darstellung in den Aufgabenkarten */
+.latexText { white-space: pre-wrap; }
+.latexInline { display: inline-block; vertical-align: baseline; margin: 0 1px; }
+.latexBlock { display: block; overflow-x: auto; overflow-y: hidden; margin: 5px 0; padding: 2px 0; }
+.taskQuestion .katex { font-size: 1.05em; color: #344054; }
+.taskQuestion .katex-display { margin: .25em 0; text-align: left; }
+
+@media (max-width: 680px) {
+  .exportDialog { width: min(96vw, 940px); max-height: 96vh; padding: 14px; }
+  .orderList { min-height: 250px; max-height: 42vh; }
+}
