@@ -451,3 +451,144 @@ h2 { margin: 0; font-size: 15px; font-weight: 650; }
   .exportDialog { width: min(96vw, 940px); max-height: 96vh; padding: 14px; }
   .orderList { min-height: 250px; max-height: 42vh; }
 }
+
+/* v1.7: Reihenfolge in einem eigenen, großen Dialog bearbeiten */
+.orderLauncher {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fafbfc;
+}
+.orderLauncherText { min-width: 0; }
+.orderLauncherText strong { display: block; font-size: 12px; color: #344054; }
+.orderLauncherText span { display: block; margin-top: 3px; font-size: 10px; line-height: 1.4; color: var(--muted); }
+.orderLauncherButton { flex: none; white-space: nowrap; }
+
+.orderOverlay { z-index: 40; padding: 14px; }
+.orderDialog {
+  width: min(1180px, calc(100vw - 28px));
+  height: min(90vh, 900px);
+  max-height: 900px;
+  padding: 18px;
+  overflow: hidden;
+}
+.orderDialogHead { flex: none; align-items: flex-start; }
+.orderDialogHead p { margin: 4px 0 0; max-width: 760px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.orderDialogStats {
+  flex: none;
+  display: flex;
+  gap: 8px;
+}
+.orderDialogStats span {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #f8f9fb;
+  color: #667085;
+  font-size: 10px;
+}
+.orderDialogStats b { color: #344054; }
+.orderDialogList {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 5px 2px 1px;
+}
+.orderDialogItem {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 118px;
+  gap: 12px;
+  align-items: start;
+  margin-bottom: 10px;
+  padding: 12px;
+  border: 1px solid #dfe4eb;
+  border-radius: 5px;
+  background: #fff;
+}
+.orderDialogItem:last-child { margin-bottom: 0; }
+.orderDialogNumber {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #f5f7fa;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 800;
+}
+.orderDialogContent { min-width: 0; }
+.orderDialogTitleRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.orderDialogTitleRow strong { color: #202939; font-size: 13px; }
+.orderDialogTitleRow > span { flex: none; color: var(--muted); font-size: 10px; font-weight: 650; }
+.orderDialogFacts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.orderDialogFacts span {
+  padding: 3px 6px;
+  border-radius: 3px;
+  background: #f2f4f7;
+  color: #667085;
+  font-size: 9px;
+}
+.orderDialogFacts b { color: #475467; }
+.orderDialogQuestion {
+  margin-top: 9px;
+  color: #344054;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.orderDialogQuestion .katex { font-size: 1.03em; }
+.orderDialogImageFrame {
+  width: min(360px, 100%);
+  margin-top: 9px;
+  border: 1px solid #e4e7ec;
+  border-radius: 4px;
+  background: white;
+  overflow: hidden;
+}
+.orderDialogImageFrame img {
+  display: block;
+  max-width: 100%;
+  max-height: 190px;
+  object-fit: contain;
+}
+.orderDialogExtraSheet { margin-top: 9px; }
+.orderDialogControls { display: flex; flex-direction: column; gap: 7px; }
+.orderDialogControls button {
+  width: 100%;
+  min-height: 34px;
+  justify-content: flex-start;
+  padding: 0 9px;
+  font-size: 10px;
+}
+.orderDialogActions {
+  flex: none;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 760px) {
+  .orderLauncher { align-items: stretch; flex-direction: column; }
+  .orderLauncherButton { width: 100%; }
+  .orderDialog { height: 94vh; padding: 12px; }
+  .orderDialogStats { flex-wrap: wrap; }
+  .orderDialogItem { grid-template-columns: 34px minmax(0, 1fr); }
+  .orderDialogNumber { width: 32px; height: 32px; }
+  .orderDialogControls { grid-column: 1 / -1; flex-direction: row; padding-left: 46px; }
+  .orderDialogControls button { justify-content: center; }
+  .orderDialogTitleRow { align-items: flex-start; flex-direction: column; gap: 3px; }
+}
+
+/* Ohne die eingebettete Sortierliste kann der Exportdialog wieder kompakter sein. */
+.exportDialog { width: min(760px, calc(100vw - 32px)); }
+@media (max-width: 680px) { .exportDialog { width: min(96vw, 760px); } }

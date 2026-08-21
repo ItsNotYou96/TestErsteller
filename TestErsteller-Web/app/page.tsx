@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, CheckCircle2, Database, FileDown, Loader2, RefreshCw } from "lucide-react";
+import { ArrowDown, ArrowUp, CheckCircle2, Database, FileDown, ListOrdered, Loader2, RefreshCw } from "lucide-react";
 import type { Afb, Competence, TaskItem, TestMetadata } from "@/lib/types";
 import { sumAfb, totalAfb } from "@/lib/scoring";
 import { LatexText } from "@/components/LatexText";
@@ -44,6 +44,7 @@ export default function Home() {
   const [message, setMessage] = useState("Bereit.");
   const [connected, setConnected] = useState<boolean | null>(null);
   const [showDialog, setShowDialog] = useState(false);
+  const [showOrderDialog, setShowOrderDialog] = useState(false);
   const [meta, setMeta] = useState<TestMetadata>({
     title: "Klassenarbeit",
     tools: "",
@@ -166,6 +167,7 @@ export default function Home() {
   ) as Record<Competence, number>;
 
   async function exportDocs() {
+    setShowOrderDialog(false);
     setShowDialog(false);
     setMessage("Word-Dateien werden erstellt …");
     try {
@@ -338,7 +340,7 @@ export default function Home() {
       </section>
 
       {showDialog && (
-        <div className="overlay" onMouseDown={() => setShowDialog(false)}>
+        <div className="overlay" onMouseDown={() => { setShowOrderDialog(false); setShowDialog(false); }}>
           <div className="dialog exportDialog" onMouseDown={(e) => e.stopPropagation()}>
             <div className="dialogHead">
               <div><div className="eyebrow">EXPORT</div><h2>Testeigenschaften</h2></div>
@@ -354,60 +356,98 @@ export default function Home() {
               <label>Thema<input value={meta.topic} onChange={(e) => setMeta({ ...meta, topic: e.target.value })} /></label>
             </div>
 
-            <section className="orderSection">
-              <div className="orderSectionHead">
-                <div>
-                  <strong>Reihenfolge der Aufgaben</strong>
-                  <span>Mit den Pfeilen die Reihenfolge im Test und im Erwartungshorizont ändern.</span>
-                </div>
+            <section className="orderLauncher">
+              <div className="orderLauncherText">
+                <strong>Reihenfolge der Aufgaben</strong>
+                <span>{selectedTasks.length} Aufgaben ausgewählt. Die Reihenfolge gilt für Test und Erwartungshorizont.</span>
               </div>
-              <div className="orderList">
-                {selectedTasks.map((task, index) => (
-                  <div className="orderItem" key={task.id}>
-                    <span className="orderNumber">{index + 1}</span>
-                    <div className="orderText">
-                      <strong>{task.title || "Aufgabe"}</strong>
-                      <span>{competenceShort[task.competence]} {task.competence} · {task.maxPoints} P · {taskAfbDisplay(task)} · {task.estimatedTime > 0 ? `${task.estimatedTime} min` : "Zeit –"}</span>
-                      <label className="extraSheetToggle">
-                        <input
-                          type="checkbox"
-                          checked={extraSheetById[task.id] ?? false}
-                          onChange={(e) => setExtraSheetById((prev) => ({ ...prev, [task.id]: e.target.checked }))}
-                        />
-                        Auf Extrablatt erledigen?
-                      </label>
-                    </div>
-                    <div className="orderControls">
-                      <button
-                        type="button"
-                        className="orderButton"
-                        onClick={() => moveSelectedTask(index, -1)}
-                        disabled={index === 0}
-                        title="Nach oben"
-                        aria-label={`${task.title} nach oben`}
-                      >
-                        <ArrowUp size={15} />
-                      </button>
-                      <button
-                        type="button"
-                        className="orderButton"
-                        onClick={() => moveSelectedTask(index, 1)}
-                        disabled={index === selectedTasks.length - 1}
-                        title="Nach unten"
-                        aria-label={`${task.title} nach unten`}
-                      >
-                        <ArrowDown size={15} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <button type="button" className="secondary orderLauncherButton" onClick={() => setShowOrderDialog(true)}>
+                <ListOrdered size={17} />Reihenfolge bearbeiten
+              </button>
             </section>
 
             <div className="dialogStats">{selected.size} Aufgaben · {totalPoints} Punkte · {totalTime} Minuten</div>
             <div className="dialogActions">
               <button className="secondary" onClick={() => setShowDialog(false)}>Abbrechen</button>
               <button className="primary" onClick={() => void exportDocs()}>Test + EWH erstellen</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDialog && showOrderDialog && (
+        <div className="overlay orderOverlay" onMouseDown={() => setShowOrderDialog(false)}>
+          <div className="dialog orderDialog" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="dialogHead orderDialogHead">
+              <div>
+                <div className="eyebrow">REIHENFOLGE</div>
+                <h2>Aufgaben sortieren</h2>
+                <p>Hier kannst du alle ausgewählten Aufgaben prüfen und ihre Reihenfolge für Test und Erwartungshorizont ändern.</p>
+              </div>
+              <ListOrdered size={26} />
+            </div>
+
+            <div className="orderDialogStats">
+              <span><b>{selectedTasks.length}</b> Aufgaben</span>
+              <span><b>{totalPoints}</b> Punkte</span>
+              <span><b>{totalTime}</b> Minuten</span>
+            </div>
+
+            <div className="orderDialogList">
+              {selectedTasks.map((task, index) => (
+                <article className="orderDialogItem" key={task.id}>
+                  <span className="orderDialogNumber">{index + 1}</span>
+                  <div className="orderDialogContent">
+                    <div className="orderDialogTitleRow">
+                      <strong>{task.title || "Aufgabe"}</strong>
+                      <span>{competenceShort[task.competence]} {task.competence}</span>
+                    </div>
+                    <div className="orderDialogFacts">
+                      <span><b>Punkte:</b> {task.maxPoints}</span>
+                      <span><b>AFB:</b> {taskAfbDisplay(task)}</span>
+                      <span><b>Zeit:</b> {task.estimatedTime > 0 ? `${task.estimatedTime} min` : "–"}</span>
+                    </div>
+                    <div className="orderDialogQuestion"><LatexText text={task.questionText || "Kein Aufgabentext hinterlegt."} /></div>
+                    {task.imageUrl && (
+                      <div className="orderDialogImageFrame">
+                        <img src={task.imageUrl} alt={`Abbildung zu ${task.title || "Aufgabe"}`} loading="lazy" referrerPolicy="no-referrer" />
+                      </div>
+                    )}
+                    <label className="extraSheetToggle orderDialogExtraSheet">
+                      <input
+                        type="checkbox"
+                        checked={extraSheetById[task.id] ?? false}
+                        onChange={(e) => setExtraSheetById((prev) => ({ ...prev, [task.id]: e.target.checked }))}
+                      />
+                      Auf Extrablatt erledigen?
+                    </label>
+                  </div>
+                  <div className="orderDialogControls">
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => moveSelectedTask(index, -1)}
+                      disabled={index === 0}
+                      aria-label={`${task.title} nach oben`}
+                    >
+                      <ArrowUp size={16} />Nach oben
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => moveSelectedTask(index, 1)}
+                      disabled={index === selectedTasks.length - 1}
+                      aria-label={`${task.title} nach unten`}
+                    >
+                      <ArrowDown size={16} />Nach unten
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            <div className="dialogActions orderDialogActions">
+              <button type="button" className="primary" onClick={() => setShowOrderDialog(false)}>Fertig</button>
             </div>
           </div>
         </div>

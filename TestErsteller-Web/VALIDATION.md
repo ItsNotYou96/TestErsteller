@@ -95,3 +95,9 @@ Prüfung:
 - Syntaxprüfung aller Dateien in `app`, `lib` und `components` mit TypeScript 5.8.3: keine Parserfehler.
 - Regression des Zahlen-Parsers separat geprüft: `10 min -> 10`, `12,5 Minuten -> 12.5`, `Zeit: 7 -> 7`.
 - Vollständiges `npm install` konnte in der Container-Umgebung wegen fehlendem Registry-Netzzugriff nicht abgeschlossen werden. Vercel installiert die neue `katex`-Abhängigkeit beim Deployment.
+
+## v1.7
+- Die kleine Reihenfolgenliste im Exportdialog wurde entfernt.
+- Stattdessen öffnet `Reihenfolge bearbeiten` einen eigenen großen Sortierdialog.
+- Der Sortierdialog zeigt Titel, Kompetenz, Punkte, AFB, Zeit, vollständigen Aufgabentext (inkl. LaTeX), optional das Aufgabenbild und die Extrablatt-Option.
+- Hoch/Runter ändert weiterhin direkt `selectedOrder`; Export und Erwartungshorizont verwenden diese Reihenfolge.
