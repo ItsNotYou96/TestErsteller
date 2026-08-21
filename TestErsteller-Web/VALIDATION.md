@@ -42,3 +42,15 @@ Sternchen:    AFB1=2, AFB2=2, AFB3=0
 Ein kompletter `next build` konnte in der Erstellungsumgebung nicht ausgeführt werden, weil der Zugriff auf das npm-Paketregister dort nicht verfügbar war. Deshalb muss nach `npm install` einmal `npm run build` ausgeführt werden. Die reine Geschäftslogik wurde davon unabhängig ausgeführt und getestet.
 
 Ein echter Notion-Integrationstest ist erst möglich, sobald `NOTION_TOKEN` gesetzt ist.
+
+## v1.3 changes
+- Task cards render the actual Notion image when available.
+- Image extraction supports Notion Files (uploaded/external), URL, rich text link/plain URL and formula URL.
+- Task cards show Punkte, AFB and Zeit.
+- Export dialog includes Lehrkraft, Datum, Klasse, Thema and per-task "Auf Extrablatt erledigen?".
+- Word export layout was rebuilt from the published WPF application's embedded labels and visual resources:
+  FRO logo, sheet/extra-sheet pictograms, student header, Hinweise, task headings, grading fields,
+  Notenspiegel, expectation table and Notenpunkte table.
+- Default title aligned to the WPF application: "Klassenarbeit".
+- TypeScript/TSX syntax/transpile check passed for all project source files.
+- Full dependency-aware `next build` was not run locally because the project dependencies are not installed in this runtime; Vercel performs the authoritative production build.

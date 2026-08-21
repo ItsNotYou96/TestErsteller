@@ -47,8 +47,29 @@ function numberValue(property: any): number {
 }
 
 function filesUrl(property: any): string | undefined {
+  if (!property) return undefined;
+
+  // WPF used a Notion Files property named "Bild". Support both uploaded
+  // Notion files and externally hosted files, plus URL/rich-text fallbacks so
+  // older databases continue to work if the property type was changed later.
   const file = property?.files?.[0];
-  return file?.file?.url || file?.external?.url || undefined;
+  const fileUrl = file?.file?.url || file?.external?.url;
+  if (typeof fileUrl === "string" && fileUrl.trim()) return fileUrl.trim();
+
+  if (typeof property?.url === "string" && property.url.trim()) return property.url.trim();
+
+  const rich = property?.rich_text || property?.title || [];
+  for (const item of rich) {
+    const href = item?.href || item?.text?.link?.url;
+    if (typeof href === "string" && href.trim()) return href.trim();
+    const text = item?.plain_text ?? item?.text?.content;
+    if (typeof text === "string" && /^https?:\/\//i.test(text.trim())) return text.trim();
+  }
+
+  const formulaString = property?.formula?.string;
+  if (typeof formulaString === "string" && /^https?:\/\//i.test(formulaString.trim())) return formulaString.trim();
+
+  return undefined;
 }
 
 function propertyByNames(props: Record<string, any>, names: string[]) {

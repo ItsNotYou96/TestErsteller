@@ -21,6 +21,16 @@ function percent(part: number, total: number) {
   return total <= 0 ? 0 : Math.round((part / total) * 100);
 }
 
+function taskAfbDisplay(task: TaskItem) {
+  const labels = afbs
+    .filter((afb) => (task.pointsByAfb?.[afb] || 0) > 0)
+    .map((afb) => afb.replace("AFB", "AFB "));
+  if (labels.length) return labels.join(", ");
+
+  const fromRaw = Array.from(new Set((task.afbRaw || "").match(/AFB\s*[123]/gi) || []));
+  return fromRaw.length ? fromRaw.map((x) => x.toUpperCase().replace(/AFB\s*/, "AFB ")).join(", ") : "–";
+}
+
 export default function Home() {
   const [classes, setClasses] = useState<string[]>(fallbackClasses);
   const [topicsByClass, setTopicsByClass] = useState<Record<string, string[]>>({});
@@ -28,16 +38,19 @@ export default function Home() {
   const [topic, setTopic] = useState("");
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<string[]>([]);
+  const [extraSheetById, setExtraSheetById] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("Bereit.");
   const [connected, setConnected] = useState<boolean | null>(null);
   const [showDialog, setShowDialog] = useState(false);
   const [meta, setMeta] = useState<TestMetadata>({
-    title: "Mathematik-Test",
+    title: "Klassenarbeit",
     tools: "",
     formPoints: "",
     classLevel: "7",
     topic: "",
+    teacher: "",
+    date: new Date().toISOString().slice(0, 10),
   });
 
   const topics = topicsByClass[classLevel] || [];
@@ -70,6 +83,7 @@ export default function Home() {
       setTopic("");
       setTasks([]);
       setSelectedOrder([]);
+      setExtraSheetById({});
       return;
     }
     if (!classTopics.includes(topic)) setTopic(classTopics[0]);
@@ -86,6 +100,7 @@ export default function Home() {
     setLoading(true);
     setMessage("Aufgaben werden geladen …");
     setSelectedOrder([]);
+    setExtraSheetById({});
     try {
       const r = await fetch(`/api/notion?action=tasks&class=${encodeURIComponent(classLevel)}&topic=${encodeURIComponent(topic)}`);
       const data = await r.json();
@@ -131,8 +146,11 @@ export default function Home() {
 
   const taskById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
   const selectedTasks = useMemo(
-    () => selectedOrder.map((id) => taskById.get(id)).filter((task): task is TaskItem => Boolean(task)),
-    [selectedOrder, taskById],
+    () => selectedOrder
+      .map((id) => taskById.get(id))
+      .filter((task): task is TaskItem => Boolean(task))
+      .map((task) => ({ ...task, onExtraSheet: extraSheetById[task.id] ?? task.onExtraSheet ?? false })),
+    [selectedOrder, taskById, extraSheetById],
   );
   const groupedTasks = useMemo(
     () => Object.fromEntries(competences.map((c) => [c, tasks.filter((t) => t.competence === c)])) as Record<Competence, TaskItem[]>,
@@ -152,7 +170,7 @@ export default function Home() {
     setShowDialog(false);
     setMessage("Word-Dateien werden erstellt …");
     try {
-      const payload = { tasks: selectedTasks, metadata: { ...meta, classLevel, topic } };
+      const payload = { tasks: selectedTasks, metadata: meta };
       const r = await fetch("/api/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -166,7 +184,7 @@ export default function Home() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${meta.title || "Mathematik-Test"}.zip`;
+      a.download = `${meta.title || "Klassenarbeit"}.zip`;
       a.click();
       URL.revokeObjectURL(url);
       setMessage("Test und Erwartungshorizont wurden erstellt.");
@@ -254,12 +272,23 @@ export default function Home() {
                             />
                             <span className="taskChoiceBody">
                               <strong>{task.title || "Aufgabe"}</strong>
+                              {task.imageUrl && (
+                                <span className="taskImageFrame">
+                                  <img
+                                    className="taskImage"
+                                    src={task.imageUrl}
+                                    alt={`Abbildung zu ${task.title || "Aufgabe"}`}
+                                    loading="lazy"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                </span>
+                              )}
                               <span className="taskQuestion">{task.questionText || "Kein Aufgabentext hinterlegt."}</span>
                               <span className="taskFacts">
                                 {orderIndex >= 0 && <span>Nr. {orderIndex + 1}</span>}
-                                <span>{task.pointsRaw || `${task.maxPoints}`} P</span>
-                                {task.estimatedTime > 0 && <span>{task.estimatedTime} min</span>}
-                                {task.imageUrl && <span>Bild</span>}
+                                <span><b>Punkte:</b> {task.maxPoints}</span>
+                                <span><b>AFB:</b> {taskAfbDisplay(task)}</span>
+                                <span><b>Zeit:</b> {task.estimatedTime > 0 ? `${task.estimatedTime} min` : "–"}</span>
                               </span>
                             </span>
                           </label>
@@ -326,6 +355,12 @@ export default function Home() {
             <label>Titel<input value={meta.title} onChange={(e) => setMeta({ ...meta, title: e.target.value })} /></label>
             <label>Hilfsmittel<input value={meta.tools} onChange={(e) => setMeta({ ...meta, tools: e.target.value })} placeholder="z. B. Taschenrechner, Formelsammlung" /></label>
             <label>Formelpunkte<input value={meta.formPoints} onChange={(e) => setMeta({ ...meta, formPoints: e.target.value })} placeholder="optional" /></label>
+            <div className="dialogFieldGrid">
+              <label>Lehrkraft<input value={meta.teacher} onChange={(e) => setMeta({ ...meta, teacher: e.target.value })} placeholder="Name der Lehrkraft" /></label>
+              <label>Datum<input type="date" value={meta.date} onChange={(e) => setMeta({ ...meta, date: e.target.value })} /></label>
+              <label>Klasse<input value={meta.classLevel} onChange={(e) => setMeta({ ...meta, classLevel: e.target.value })} /></label>
+              <label>Thema<input value={meta.topic} onChange={(e) => setMeta({ ...meta, topic: e.target.value })} /></label>
+            </div>
 
             <section className="orderSection">
               <div className="orderSectionHead">
@@ -340,7 +375,15 @@ export default function Home() {
                     <span className="orderNumber">{index + 1}</span>
                     <div className="orderText">
                       <strong>{task.title || "Aufgabe"}</strong>
-                      <span>{competenceShort[task.competence]} {task.competence} · {task.maxPoints} P</span>
+                      <span>{competenceShort[task.competence]} {task.competence} · {task.maxPoints} P · {taskAfbDisplay(task)} · {task.estimatedTime || 0} min</span>
+                      <label className="extraSheetToggle">
+                        <input
+                          type="checkbox"
+                          checked={extraSheetById[task.id] ?? false}
+                          onChange={(e) => setExtraSheetById((prev) => ({ ...prev, [task.id]: e.target.checked }))}
+                        />
+                        Auf Extrablatt erledigen?
+                      </label>
                     </div>
                     <div className="orderControls">
                       <button

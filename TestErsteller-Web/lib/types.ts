@@ -28,6 +28,7 @@ export interface TaskItem {
   estimatedTime: number;
   expectation: string;
   imageUrl?: string;
+  onExtraSheet?: boolean;
   pointsByAfb: Partial<Record<Afb, number>>;
   subTasks: SubTaskItem[];
 }
@@ -38,4 +39,6 @@ export interface TestMetadata {
   formPoints: string;
   classLevel: string;
   topic: string;
+  teacher: string;
+  date: string;
 }

@@ -378,3 +378,47 @@ h2 { margin: 0; font-size: 15px; font-weight: 650; }
   color: #475467;
 }
 .orderButton:hover:not(:disabled) { background: #eef1f5; }
+
+/* WPF-nahe Aufgabenkarte: Bild sowie Punkte / AFB / Zeit sichtbar */
+.taskImageFrame {
+  display: block;
+  width: 100%;
+  margin: 2px 0 7px;
+  border: 1px solid #e4e7ec;
+  border-radius: 3px;
+  background: #fff;
+  overflow: hidden;
+  text-align: center;
+}
+.taskImage {
+  display: block;
+  width: 100%;
+  max-height: 210px;
+  object-fit: contain;
+  background: white;
+}
+.taskFacts > span b { color: #475467; font-weight: 700; }
+.dialogFieldGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.extraSheetToggle {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  color: #475467;
+  font-size: 10px;
+  font-weight: 600;
+}
+.extraSheetToggle input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+@media (max-width: 520px) {
+  .dialogFieldGrid { grid-template-columns: 1fr; }
+}
