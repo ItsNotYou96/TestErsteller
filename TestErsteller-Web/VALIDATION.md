@@ -1,8 +1,10 @@
-# Validierung v2.4
+# Validation v2.5
 
-- `app/admin/page.tsx` und `components/LatexText.tsx` mit TypeScript `transpileModule` syntaktisch geprüft: 0 Parsefehler.
-- Aufgabentext wird standardmäßig über `LatexText`/KaTeX gerendert; der Quelltext ist nur nach Klick auf „Quelltext bearbeiten“ sichtbar.
-- Erwartungshorizont verwendet denselben Ansicht/Bearbeiten-Wechsel.
-- Beim Wechsel der ausgewählten Aufgabe werden beide Bereiche automatisch auf die formatierte Ansicht zurückgesetzt.
-- Keine neuen npm-Abhängigkeiten; die bestehende `katex`-Abhängigkeit wird weiterverwendet.
-- Ein vollständiger `next build` ist in dieser Containerumgebung ohne installierte Projektabhängigkeiten nicht aussagekräftig; Vercel bleibt der Integrationstest.
+- Admin upload supports native drag-and-drop for PDF/DOCX.
+- Drag state is visually highlighted and uses copy semantics.
+- Dropped files are merged with already selected files and deduplicated by name/size/lastModified.
+- Unsupported file types are rejected client-side with a visible message.
+- Existing limits remain enforced client-side and server-side: max. 10 files, max. 4 MB total.
+- Selected documents are shown individually with file size and can be removed before analysis.
+- File-picker remains available as a fallback and can be used repeatedly.
+- Parsed all 24 TypeScript/TSX source files with the TypeScript parser: 0 syntax-error files.

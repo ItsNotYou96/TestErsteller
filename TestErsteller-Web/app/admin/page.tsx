@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, Code2, Eye, FileSearch, Loader2, LogOut, Shield, Trash2, Upload, X } from "lucide-react";
 import { LatexText } from "@/components/LatexText";
 import type { AdminStatus, ImportDraft } from "@/lib/adminTypes";
@@ -25,6 +25,8 @@ export default function AdminPage() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const fileDragDepth = useRef(0);
   const [defaultClass, setDefaultClass] = useState("7");
   const [defaultTopic, setDefaultTopic] = useState("");
   const [useLlm, setUseLlm] = useState(true);
@@ -81,6 +83,70 @@ export default function AdminPage() {
     await fetch("/api/admin/auth", { method: "DELETE" });
     setStatus((s) => s ? { ...s, authenticated: false } : s);
     setDrafts([]);
+  }
+
+  function acceptDocuments(incoming: File[], append = true) {
+    const allowed = incoming.filter((file) => {
+      const name = file.name.toLowerCase();
+      return name.endsWith(".pdf") || name.endsWith(".docx") ||
+        file.type === "application/pdf" ||
+        file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    });
+    const rejected = incoming.filter((file) => !allowed.includes(file));
+
+    const base = append ? files : [];
+    const merged = [...base, ...allowed].filter((file, index, all) =>
+      all.findIndex((candidate) => candidate.name === file.name && candidate.size === file.size && candidate.lastModified === file.lastModified) === index
+    );
+    const limited = merged.slice(0, 10);
+    const totalBytes = limited.reduce((sum, file) => sum + file.size, 0);
+
+    if (rejected.length) {
+      setMessage(`Nicht unterstützt: ${rejected.map((file) => file.name).join(", ")}. Bitte nur PDF oder DOCX verwenden.`);
+    } else if (merged.length > 10) {
+      setMessage("Es können höchstens 10 Dateien gleichzeitig verarbeitet werden.");
+    } else if (totalBytes > 4 * 1024 * 1024) {
+      setMessage("Die ausgewählten Dateien sind zusammen größer als 4 MB. Bitte die Dateien auf mehrere Importe verteilen.");
+    } else {
+      setMessage("");
+    }
+
+    setFiles(totalBytes > 4 * 1024 * 1024 ? base : limited);
+  }
+
+  function removeDocument(index: number) {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function onFileDragEnter(e: React.DragEvent<HTMLElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    fileDragDepth.current += 1;
+    if (e.dataTransfer.types.includes("Files")) setIsDraggingFiles(true);
+  }
+
+  function onFileDragOver(e: React.DragEvent<HTMLElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer.types.includes("Files")) {
+      e.dataTransfer.dropEffect = "copy";
+      setIsDraggingFiles(true);
+    }
+  }
+
+  function onFileDragLeave(e: React.DragEvent<HTMLElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    fileDragDepth.current = Math.max(0, fileDragDepth.current - 1);
+    if (fileDragDepth.current === 0) setIsDraggingFiles(false);
+  }
+
+  function onFileDrop(e: React.DragEvent<HTMLElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    fileDragDepth.current = 0;
+    setIsDraggingFiles(false);
+    acceptDocuments(Array.from(e.dataTransfer.files || []), true);
   }
 
   async function analyze() {
@@ -145,6 +211,12 @@ export default function AdminPage() {
 
   function sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function formatFileSize(bytes: number) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1).replace(".", ",")} MB`;
   }
 
   function parseResetSeconds(value?: string) {
@@ -253,12 +325,39 @@ export default function AdminPage() {
       <section className="adminUploadCard panel">
         <div className="adminSectionTitle"><Upload size={19} /><div><h2>1. Dokumente hochladen</h2><p>Klassenarbeit, Arbeitsblatt und optional Erwartungshorizont gemeinsam auswählen.</p></div></div>
         <div className="adminUploadGrid">
-          <label className="adminFileDrop">
-            <input type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple onChange={(e) => setFiles(Array.from(e.target.files || []))} />
-            <FileSearch size={24} />
-            <strong>{files.length ? `${files.length} Datei(en) ausgewählt` : "PDF / DOCX auswählen"}</strong>
-            <span>{files.length ? files.map((x) => x.name).join(" · ") : "Mehrere Dateien sind möglich, z. B. Test + Erwartungshorizont. Zusammen derzeit max. 4 MB (Vercel-Limit)."}</span>
-          </label>
+          <div
+            className={`adminFileDrop ${isDraggingFiles ? "dragging" : ""}`}
+            onDragEnter={onFileDragEnter}
+            onDragOver={onFileDragOver}
+            onDragLeave={onFileDragLeave}
+            onDrop={onFileDrop}
+          >
+            <label className="adminFileDropPicker">
+              <input
+                type="file"
+                accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                multiple
+                onChange={(e) => {
+                  acceptDocuments(Array.from(e.target.files || []), true);
+                  e.currentTarget.value = "";
+                }}
+              />
+              <FileSearch size={28} />
+              <strong>{isDraggingFiles ? "Dokumente hier ablegen" : files.length ? "Weitere PDF / DOCX hinzufügen" : "PDF / DOCX hierher ziehen"}</strong>
+              <span>oder klicken, um Dateien auszuwählen · bis zu 10 Dateien · zusammen max. 4 MB</span>
+            </label>
+            {files.length > 0 && (
+              <div className="adminSelectedFiles" aria-label="Ausgewählte Dokumente">
+                {files.map((file, index) => (
+                  <div className="adminSelectedFile" key={`${file.name}-${file.size}-${file.lastModified}`}>
+                    <span title={file.name}>{file.name}</span>
+                    <small>{formatFileSize(file.size)}</small>
+                    <button type="button" className="adminFileRemove" onClick={() => removeDocument(index)} aria-label={`${file.name} entfernen`} title="Datei entfernen"><X size={14} /></button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           <div className="adminContextFields">
             <label>Klasse als Vorgabe<select value={defaultClass} onChange={(e) => setDefaultClass(e.target.value)}><option value="">Automatisch erkennen</option>{LEGACY_CLASSES.filter((x) => Number(x) <= 10).map((x) => <option key={x}>{x}</option>)}</select></label>
             <label>Thema als Vorgabe<select value={defaultTopic} onChange={(e) => setDefaultTopic(e.target.value)}><option value="">Automatisch erkennen</option>{(LEGACY_TOPICS_BY_CLASS[defaultClass] || []).map((x) => <option key={x}>{x}</option>)}</select></label>
