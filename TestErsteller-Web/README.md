@@ -148,3 +148,10 @@ Die Duplikatprüfung berücksichtigt ab v2.2 echte Zahlen, Operatoren, mathemati
 - Die Ähnlichkeitsfunktion normalisiert typische mathematische Formulierungen (z. B. „Term aufstellen“ / „mit einem Term ausdrücken“) und berücksichtigt Text, mathematische Struktur, Zahlen und Teilaufgaben getrennt.
 - Groq-Metadaten werden über Chat Completions mit strict JSON Schema angefordert; bei einem seltenen Parserfehler erfolgt automatisch ein JSON-Object-Retry.
 - Der frühere technische Hinweis, dass Groq keine neuen Aufgaben hinzufügen darf, wurde aus der Oberfläche entfernt.
+
+## v2.4 – Formatierte LaTeX-Ansicht im Adminbereich
+
+- Aufgabentext und Erwartungshorizont werden in der Prüfansicht standardmäßig mit KaTeX gerendert angezeigt.
+- Der rohe LaTeX-/Text-Quellcode ist nicht mehr dauerhaft sichtbar. Über **„Quelltext bearbeiten“** kann er bei Bedarf eingeblendet und geändert werden.
+- Mit **„Formatierte Ansicht“** wechselt man unmittelbar zurück zur gerenderten Darstellung.
+- Beim Wechsel zwischen Aufgaben wird wieder automatisch die formatierte Ansicht geöffnet.

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, FileSearch, Loader2, LogOut, Shield, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, Code2, Eye, FileSearch, Loader2, LogOut, Shield, Trash2, Upload, X } from "lucide-react";
 import { LatexText } from "@/components/LatexText";
 import type { AdminStatus, ImportDraft } from "@/lib/adminTypes";
 import type { Competence } from "@/lib/types";
@@ -34,6 +34,8 @@ export default function AdminPage() {
   const [warnings, setWarnings] = useState<string[]>([]);
   const [sourceSummary, setSourceSummary] = useState<Array<{ name: string; characters: number; images: number; method?: string }>>([]);
   const [history, setHistory] = useState<ImportHistoryEntry[]>([]);
+  const [editQuestionSource, setEditQuestionSource] = useState(false);
+  const [editExpectationSource, setEditExpectationSource] = useState(false);
 
   useEffect(() => {
     fetch("/api/admin/auth")
@@ -53,6 +55,11 @@ export default function AdminPage() {
 
   const selected = useMemo(() => drafts.find((x) => x.id === selectedId) || drafts[0], [drafts, selectedId]);
   const includedCount = drafts.filter((x) => x.include).length;
+
+  useEffect(() => {
+    setEditQuestionSource(false);
+    setEditExpectationSource(false);
+  }, [selectedId]);
 
   async function login(e: React.FormEvent) {
     e.preventDefault();
@@ -306,8 +313,34 @@ export default function AdminPage() {
                   <label>AFB<input value={selected.afbRaw} onChange={(e) => patchDraft(selected.id, { afbRaw: e.target.value })} placeholder="z. B. a: AFB 1, b: AFB 2" /></label>
                   <label>Punkte<input value={selected.pointsRaw} onChange={(e) => { const pointsRaw = e.target.value; patchDraft(selected.id, { pointsRaw, maxPoints: parsePointsSpec(pointsRaw).maxPoints }); }} placeholder="z. B. 1+1+2" /></label>
                   <label>Zeit (Min.)<input type="number" min="0" step="0.5" value={selected.estimatedTime || ""} onChange={(e) => patchDraft(selected.id, { estimatedTime: Number(e.target.value) || 0 })} /></label>
-                  <label className="span2">Aufgabentext<textarea rows={9} value={selected.questionText} onChange={(e) => patchDraft(selected.id, { questionText: e.target.value })} /></label>
-                  <label className="span2">Erwartungshorizont<textarea rows={8} value={selected.expectation} onChange={(e) => patchDraft(selected.id, { expectation: e.target.value })} placeholder="Lösung / Bewertungserwartung" /></label>
+                  <div className="span2 adminLatexField">
+                    <div className="adminLatexFieldHead">
+                      <span>Aufgabentext</span>
+                      <button type="button" className="secondary adminLatexToggle" onClick={() => setEditQuestionSource((value) => !value)}>
+                        {editQuestionSource ? <Eye size={14} /> : <Code2 size={14} />}
+                        {editQuestionSource ? "Formatierte Ansicht" : "Quelltext bearbeiten"}
+                      </button>
+                    </div>
+                    {editQuestionSource ? (
+                      <textarea rows={9} value={selected.questionText} onChange={(e) => patchDraft(selected.id, { questionText: e.target.value })} />
+                    ) : (
+                      <div className="adminLatexRendered adminLatexRenderedQuestion"><LatexText text={selected.questionText} /></div>
+                    )}
+                  </div>
+                  <div className="span2 adminLatexField">
+                    <div className="adminLatexFieldHead">
+                      <span>Erwartungshorizont</span>
+                      <button type="button" className="secondary adminLatexToggle" onClick={() => setEditExpectationSource((value) => !value)}>
+                        {editExpectationSource ? <Eye size={14} /> : <Code2 size={14} />}
+                        {editExpectationSource ? "Formatierte Ansicht" : "Quelltext bearbeiten"}
+                      </button>
+                    </div>
+                    {editExpectationSource ? (
+                      <textarea rows={8} value={selected.expectation} onChange={(e) => patchDraft(selected.id, { expectation: e.target.value })} placeholder="Lösung / Bewertungserwartung" />
+                    ) : (
+                      <div className="adminLatexRendered">{selected.expectation ? <LatexText text={selected.expectation} /> : <span className="adminLatexEmpty">Noch kein Erwartungshorizont vorhanden.</span>}</div>
+                    )}
+                  </div>
                 </div>
 
                 <section className="adminPreview">
