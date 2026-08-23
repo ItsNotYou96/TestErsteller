@@ -42,3 +42,13 @@ Mit den Originalstrukturen wurden u. a. geprüft:
 - Word-Listen-DOCX Aufgabe 7 bleibt `4`; die nachfolgende dokumentweite Formbewertung `(3 BE)` wird nicht zur Aufgabe addiert.
 
 Bei `Je N P.` wird die höchste erkannte Teilaufgabenbezeichnung (z. B. d) → vier Teilaufgaben) als zusätzliche Absicherung verwendet, falls die PDF-Textschicht eine frühere Teilaufgabenmarke beschädigt.
+
+## v3.1 – Duplicate-Rerank-Regression
+
+- schwacher bester lokaler Treffer (~20 %): 0 Groq-Aufrufe
+- verdächtiger Treffer (~60 %): genau 1 Groq-Aufruf
+- maximal an Groq gesendete Kandidaten: 5
+- Kandidatentext pro Treffer auf 650 Zeichen begrenzt; neue Aufgabe auf 1800 Zeichen begrenzt
+- max_completion_tokens für das Reranking von 1200 auf 600 reduziert
+- bereits vorhandener duplicatePool wird nach der Metadatenanalyse wiederverwendet, auch wenn `duplicates` leer ist
+- Syntax-Transpilierung aller TS/TSX-Dateien separat geprüft

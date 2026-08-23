@@ -38,3 +38,15 @@ Ohne diese Angaben werden die obigen Defaults verwendet. `GROQ_API_KEY` und `GRO
 ## Sicherheitsprinzip des Importers
 
 Wenn eine Dokumentstruktur weder deterministisch noch über eine validierte Blockgruppierung sicher ermittelt werden kann, wird der Import abgebrochen bzw. gewarnt. Der Importer erzeugt in diesem Fall bewusst keine erfundenen Aufgaben.
+
+## v3.1 – sparsame Ähnlichkeitsanalyse
+
+Die Duplikatprüfung arbeitet jetzt konsequent zweistufig:
+
+1. Alle vorhandenen Aufgaben der gewählten Klasse werden lokal verglichen.
+2. Groq wird nur aufgerufen, wenn der beste lokale Treffer mindestens 34 % erreicht.
+3. An Groq gehen höchstens die fünf besten Kandidaten (jeweils gekürzt), nicht mehr ein großer Kandidatenpool.
+4. Nahezu identische lokale Treffer ab 95 % werden ohne LLM als sehr ähnliche Variante markiert.
+5. Bereits geladene Kandidaten werden nach der Metadatenanalyse wiederverwendet; fehlende sichtbare Treffer lösen keine zweite vollständige Notion-Suche mehr aus.
+
+Dadurch sinken Groq-Tokenverbrauch und Wartezeiten deutlich, besonders bei mehreren Dokumenten in einem Importlauf.

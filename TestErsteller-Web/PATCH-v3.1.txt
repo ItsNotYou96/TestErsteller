@@ -1,0 +1,9 @@
+TestErsteller v3.1 – DIRECT PATCH
+
+Diese Dateien direkt in den bestehenden Projekt-Root kopieren und vorhandene Dateien ersetzen.
+Keine neuen npm-Pakete und keine neuen Vercel-Environment-Variablen erforderlich.
+
+Geändert:
+- lib/duplicateCheck.ts
+- app/api/admin/analyze-task/route.ts
+- README.md / VALIDATION.md

@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
     const analyzed = await analyzeDraftWithLlm(body.draft, body.classLevel, body.topic);
     // The import request already searched every topic/competence in the class. Reuse those candidates
     // here so each Groq metadata request does not trigger dozens of fresh Notion queries.
-    if (analyzed.duplicates?.length) {
+    if (analyzed.duplicatePool?.length || analyzed.duplicates?.length) {
       const withDuplicate = await rerankDuplicateCandidates(analyzed);
       return NextResponse.json({ draft: withDuplicate });
     }

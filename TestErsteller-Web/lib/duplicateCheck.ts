@@ -9,6 +9,15 @@ const STOPWORDS = new Set([
   "fuer", "zur", "zum", "im", "in", "an", "auf", "aus", "ist", "sind", "wird", "werden", "kann", "soll", "alle", "jeweils",
 ]);
 
+// Duplicate analysis is intentionally two-stage: cheap local retrieval over the whole class,
+// then Groq only for genuinely ambiguous/suspicious candidates. This keeps the Free Tier usable
+// even when many documents are imported in one session.
+const LOCAL_GROQ_TRIGGER = 0.34;
+const LOCAL_CONFIDENT_DUPLICATE = 0.95;
+const RERANK_CANDIDATE_FLOOR = 0.26;
+const MAX_RERANK_CANDIDATES = 5;
+const MAX_LOCAL_POOL = 12;
+
 function canonical(text: string) {
   return (text || "").normalize("NFKC").toLowerCase()
     .replace(/[−–—]/g, "-").replace(/[·⋅×]/g, "*").replace(/÷/g, "/")
@@ -128,7 +137,31 @@ function localCandidates(draft: ImportDraft, tasks: Awaited<ReturnType<typeof lo
     competence: task.competence,
     localScore: similarity(draft.questionText, task.questionText, draft.title, task.title),
     score: similarity(draft.questionText, task.questionText, draft.title, task.title),
-  } as DuplicateCandidate)).sort((a, b) => (b.localScore || 0) - (a.localScore || 0)).slice(0, 14);
+  } as DuplicateCandidate)).sort((a, b) => (b.localScore || 0) - (a.localScore || 0)).slice(0, MAX_LOCAL_POOL);
+}
+
+function rerankSelection(candidates: DuplicateCandidate[]) {
+  const sorted = [...candidates].sort((a, b) => (b.localScore || 0) - (a.localScore || 0));
+  const best = sorted[0]?.localScore || 0;
+
+  // Near-identical local matches do not need an LLM to tell us that they are near duplicates.
+  // This is both cheaper and more deterministic.
+  if (best >= LOCAL_CONFIDENT_DUPLICATE) {
+    const first = sorted[0];
+    first.relation = "near_duplicate";
+    first.score = Math.max(first.score, best);
+    first.reason ||= "Nahezu identischer Wortlaut bzw. mathematische Struktur (lokaler Vergleich).";
+    return { shouldCallGroq: false, candidates: [] as DuplicateCandidate[] };
+  }
+
+  // If even the best local candidate is weak, a semantic rerank would usually spend tokens only
+  // to confirm that there is no duplicate. Keep the local result and skip Groq entirely.
+  if (best < LOCAL_GROQ_TRIGGER) return { shouldCallGroq: false, candidates: [] as DuplicateCandidate[] };
+
+  const selected = sorted
+    .filter((candidate) => (candidate.localScore || 0) >= RERANK_CANDIDATE_FLOOR)
+    .slice(0, MAX_RERANK_CANDIDATES);
+  return { shouldCallGroq: selected.length > 0, candidates: selected };
 }
 
 const RERANK_SCHEMA = {
@@ -156,16 +189,19 @@ const RERANK_SCHEMA = {
 async function rerankWithGroq(draft: ImportDraft, candidates: DuplicateCandidate[]) {
   const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey || !candidates.length) return candidates;
+  const selection = rerankSelection(candidates);
+  if (!selection.shouldCallGroq) return candidates.sort((a, b) => b.score - a.score);
+  const rerankCandidates = selection.candidates;
   const prompt = `Vergleiche EINE neue Mathematikaufgabe mit bestehenden Aufgaben. Entscheide didaktisch, ob es praktisch dieselbe Aufgabe/Variante ist, nur dieselbe mathematische Fertigkeit prüft, lediglich thematisch verwandt ist oder nicht verwandt ist.
 
 Bewerte NICHT nach identischen Zahlen allein. Andere Zahlen bei ansonsten gleicher Handlung/Struktur können eine near_duplicate-Variante sein. Gleicher Themenbegriff ohne gleiche Aufgabenhandlung reicht nicht. Gib für jeden Kandidaten eine score zwischen 0 und 1 und eine sehr kurze Begründung. Verwende ausschließlich die gelieferten candidateId-Werte.
 
 NEUE AUFGABE:
 Titel: ${draft.title}
-${draft.questionText.slice(0, 2600)}
+${draft.questionText.slice(0, 1800)}
 
 KANDIDATEN:
-${candidates.map((c, i) => `#${i + 1} candidateId=${c.id}\nTitel: ${c.title}\nThema: ${c.topic}; Kompetenz: ${c.competence}\n${c.questionText.slice(0, 1000)}`).join("\n\n")}`;
+${rerankCandidates.map((c, i) => `#${i + 1} candidateId=${c.id}\nTitel: ${c.title}\nThema: ${c.topic}; Kompetenz: ${c.competence}\n${c.questionText.slice(0, 650)}`).join("\n\n")}`;
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -175,7 +211,7 @@ ${candidates.map((c, i) => `#${i + 1} candidateId=${c.id}\nTitel: ${c.title}\nTh
       reasoning_effort: "low",
       reasoning_format: "hidden",
       response_format: { type: "json_schema", json_schema: { name: "duplicate_rerank", strict: true, schema: RERANK_SCHEMA } },
-      max_completion_tokens: 1200,
+      max_completion_tokens: 600,
     }),
     cache: "no-store",
   });
@@ -185,7 +221,7 @@ ${candidates.map((c, i) => `#${i + 1} candidateId=${c.id}\nTitel: ${c.title}\nTh
   if (typeof raw !== "string") return candidates;
   let parsed: any;
   try { parsed = JSON.parse(raw); } catch { return candidates; }
-  const byId = new Map(candidates.map((c) => [c.id, c]));
+  const byId = new Map(rerankCandidates.map((c) => [c.id, c]));
   for (const match of parsed.matches || []) {
     const candidate = byId.get(String(match.candidateId));
     if (!candidate) continue;
@@ -206,7 +242,7 @@ export async function addDuplicateCandidates(drafts: ImportDraft[], options: { l
     if (!draft.classLevel) continue;
     if (!classCache.has(draft.classLevel)) classCache.set(draft.classLevel, await allTasksForClass(draft.classLevel, cache));
     let candidates = localCandidates(draft, classCache.get(draft.classLevel) || []);
-    draft.duplicatePool = candidates.slice(0, 12);
+    draft.duplicatePool = candidates.slice(0, MAX_LOCAL_POOL);
     if (options.llmRerank && process.env.GROQ_API_KEY?.trim()) candidates = await rerankWithGroq(draft, candidates);
     const visible = candidates.filter((candidate) => candidate.score >= (candidate.relation ? 0.45 : 0.42)).slice(0, 5);
     draft.duplicates = visible;
@@ -222,7 +258,7 @@ export async function rerankDuplicateCandidates(draft: ImportDraft) {
   if (!existing.length) return draft;
   const candidates = process.env.GROQ_API_KEY?.trim() ? await rerankWithGroq(draft, existing) : existing;
   const visible = candidates.filter((candidate) => candidate.score >= (candidate.relation ? 0.45 : 0.42)).slice(0, 5);
-  draft.duplicatePool = candidates.slice(0, 12);
+  draft.duplicatePool = candidates.slice(0, MAX_LOCAL_POOL);
   draft.duplicates = visible;
   draft.duplicate = visible[0];
   if (draft.duplicate?.relation === "near_duplicate" && draft.duplicate.score >= 0.97) draft.include = false;
