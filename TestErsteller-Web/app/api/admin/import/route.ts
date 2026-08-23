@@ -1,21 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAdminRequest } from "@/lib/adminAuth";
 import { addDuplicateCandidates } from "@/lib/duplicateCheck";
-import { heuristicDrafts, parseUploadedFile, type ParsedSource } from "@/lib/importParsing";
+import { draftsFromSources, parseUploadedFile, type ParsedSource } from "@/lib/importParsing";
 import { llmConfigured } from "@/lib/llmAnalysis";
-import { repairPdfMathWithGroq, visionOcrConfigured, visionOcrModel } from "@/lib/pdfVisionOcr";
+import { likelyBrokenPdfMath, repairTaskMathWithGroq, visionOcrConfigured, visionOcrModel } from "@/lib/pdfVisionOcr";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
-
-type ExtractionMethod = "pdf-text" | "docx" | "groq-math";
-type SourceWithMethod = ParsedSource & { extractionMethod?: ExtractionMethod };
-
-function sourceWithPages(source: SourceWithMethod, pages: Array<{ pageNumber: number; text: string }>): SourceWithMethod {
-  const text = pages.map((page) => page.text).filter(Boolean).join("\n\n");
-  const simplified = pages.map((page) => `[[PAGE:${page.pageNumber}]]\n${page.text}`).join("\n");
-  return { ...source, pages, text, simplified, extractionMethod: "groq-math" };
-}
 
 export async function POST(request: NextRequest) {
   if (!isAdminRequest(request)) return NextResponse.json({ error: "Nicht als Admin angemeldet." }, { status: 401 });
@@ -25,88 +16,62 @@ export async function POST(request: NextRequest) {
     if (!files.length) return NextResponse.json({ error: "Bitte mindestens eine PDF- oder DOCX-Datei auswählen." }, { status: 400 });
     if (files.length > 10) return NextResponse.json({ error: "Bitte höchstens 10 Dateien gleichzeitig hochladen." }, { status: 400 });
     const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
-    if (totalBytes > 4 * 1024 * 1024) return NextResponse.json({ error: "Die ausgewählten Dateien sind zusammen größer als 4 MB. Vercel begrenzt Function-Uploads auf 4,5 MB. Bitte Dateien verkleinern oder in getrennten Importen verarbeiten." }, { status: 413 });
+    if (totalBytes > 4 * 1024 * 1024) return NextResponse.json({ error: "Die ausgewählten Dateien sind zusammen größer als 4 MB. Bitte Dateien verkleinern oder auf mehrere Importe verteilen." }, { status: 413 });
 
     const classLevel = String(form.get("classLevel") || "").trim() || undefined;
     const topic = String(form.get("topic") || "").trim() || undefined;
     const useLlm = String(form.get("useLlm") || "false") === "true";
-    // Kept under the old form field name so existing clients remain compatible. In v2.2 this no
-    // longer means "let vision OCR invent the page text". It only repairs math inside trusted text.
     const repairMathVisually = String(form.get("useVisionOcr") || "false") === "true";
     const warnings: string[] = [];
 
-    let sources: SourceWithMethod[] = (await Promise.all(files.map(parseUploadedFile))).map((source) => ({
-      ...source,
-      extractionMethod: source.mimeType === "application/pdf" ? "pdf-text" : "docx",
-    }));
-
-    const repairedPageMap = new Map<string, Set<number>>();
-    const rejectedPageMap = new Map<string, Set<number>>();
-
-    if (repairMathVisually) {
-      for (let i = 0; i < sources.length; i++) {
-        const source = sources[i];
-        if (source.mimeType !== "application/pdf") continue;
-
-        const initialDrafts = heuristicDrafts([source], classLevel, topic);
-        const hasTrustedSkeleton = (source.text || "").trim().length >= 120 && initialDrafts.length > 0 && (source.pages?.length || 0) > 0;
-
-        if (!hasTrustedSkeleton) {
-          warnings.push(`${source.name}: Die PDF hat keine ausreichend verlässliche Text-/Aufgabenstruktur. Die visuelle Erkennung wurde aus Sicherheitsgründen NICHT verwendet, weil ein Vision-Modell ohne Textanker Aufgaben erfinden könnte.`);
-          continue;
-        }
-        if (!visionOcrConfigured()) {
-          warnings.push(`${source.name}: Visuelle Formelkorrektur wurde gewählt, aber GROQ_API_KEY ist nicht gesetzt.`);
-          continue;
-        }
-
-        try {
-          const result = await repairPdfMathWithGroq(source.bytes, source.pages || []);
-          sources[i] = sourceWithPages(source, result.pages);
-          repairedPageMap.set(source.name, new Set(result.repairedPages));
-          rejectedPageMap.set(source.name, new Set(result.rejectedPages.map((x) => x.pageNumber)));
-
-          if (result.repairedPages.length) {
-            warnings.push(`${source.name}: Mathematische Schreibweise auf Seite(n) ${result.repairedPages.join(", ")} wurde visuell mit Groq ${visionOcrModel()} korrigiert. Die Aufgabenstruktur stammt weiterhin ausschließlich aus der PDF-Textschicht.`);
-          }
-          for (const rejected of result.rejectedPages) {
-            warnings.push(`${source.name}, Seite ${rejected.pageNumber}: Visuelle Korrektur verworfen (${rejected.reason}). Originaltext bleibt erhalten.`);
-          }
-          if (result.skippedPages.length) {
-            warnings.push(`${source.name}: Seite(n) ${result.skippedPages.join(", ")} wurden nicht visuell übernommen, weil dort keine sichere Text-/Aufgabenstruktur als Kontrollanker vorhanden war.`);
-          }
-        } catch (error) {
-          warnings.push(`${source.name}: Visuelle Formelkorrektur ist fehlgeschlagen; der unveränderte PDF-Text wird verwendet. ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-    }
-
-    let drafts = heuristicDrafts(sources, classLevel, topic);
-    for (const draft of drafts) {
-      const repaired = repairedPageMap.get(draft.sourceFile);
-      const rejected = rejectedPageMap.get(draft.sourceFile);
-      if (draft.sourcePages?.some((page) => repaired?.has(page))) draft.mathRepair = "visual";
-      else if (draft.sourcePages?.some((page) => rejected?.has(page))) draft.mathRepair = "rejected";
-    }
-
-    if (useLlm) {
-      const sparsePdf = sources.some((source) => source.mimeType === "application/pdf" && (source.text || "").trim().length < 400);
-      if (sparsePdf) warnings.push("Mindestens eine PDF enthält kaum auslesbaren Text. Die Anwendung erzeugt daraus bewusst keine Vision-Aufgaben ohne verlässliche Textanker. Solche Scan-PDFs sollten zuerst mit einer echten OCR-Textschicht versehen werden.");
-      if (!llmConfigured()) warnings.push("KI-Analyse wurde angefordert, aber GROQ_API_KEY ist nicht gesetzt. Heuristische Analyse verwendet.");
-    }
+    const sources: ParsedSource[] = await Promise.all(files.map(parseUploadedFile));
+    const segmented = await draftsFromSources(sources, classLevel, topic, useLlm && llmConfigured());
+    let drafts = segmented.drafts;
+    warnings.push(...segmented.warnings);
 
     if (!drafts.length) {
       return NextResponse.json({
-        error: "Der Dokumenttext wurde gelesen, aber es konnten keine Aufgabenblöcke sicher getrennt werden. Aus Sicherheitsgründen erzeugt die visuelle Erkennung keine neuen Aufgaben ohne Textanker. Bei einer Scan-PDF bitte zuerst OCR/Textlayer erzeugen oder die PDF manuell prüfen.",
-        sourceSummary: sources.map((s) => ({ name: s.name, characters: s.text.length, images: s.images.length, method: s.extractionMethod })),
+        error: "Der Dokumentinhalt wurde in Blöcke zerlegt, aber es konnten keine verlässlichen Aufgabenbereiche bestimmt werden. Es wurde bewusst kein Aufgabentext erfunden. Aktiviere die KI-Analyse für eine semantische Blockgruppierung oder prüfe das Dokument manuell.",
+        sourceSummary: sources.map((s) => ({ name: s.name, characters: s.text.length, blocks: s.blocks.length, images: s.images.length, method: s.mimeType === "application/pdf" ? "PDF-Blöcke" : "DOCX-Blöcke" })),
       }, { status: 422 });
     }
 
+    // Visual analysis never determines task boundaries. It only receives already segmented task
+    // text and is allowed to repair mathematical notation inside that immutable task.
+    if (repairMathVisually) {
+      if (!visionOcrConfigured()) warnings.push("Mathematik visuell korrigieren wurde gewählt, aber GROQ_API_KEY ist nicht gesetzt.");
+      else {
+        const sourceByName = new Map(sources.map((source) => [source.name, source]));
+        let repaired = 0;
+        let skipped = 0;
+        for (const draft of drafts) {
+          const source = sourceByName.get(draft.sourceFile);
+          if (!source || source.mimeType !== "application/pdf" || !draft.sourcePages?.length) continue;
+          if (!likelyBrokenPdfMath(draft.questionText)) { skipped++; continue; }
+          try {
+            draft.questionText = await repairTaskMathWithGroq(source.bytes, draft.questionText, draft.sourcePages);
+            draft.mathRepair = "visual";
+            repaired++;
+          } catch (error) {
+            draft.mathRepair = "rejected";
+            warnings.push(`${draft.sourceFile} · ${draft.title}: Visuelle Mathekorrektur nicht übernommen. ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        if (repaired) warnings.push(`${repaired} Aufgabe(n) mit erkennbar beschädigter mathematischer Textschicht wurden gezielt mit ${visionOcrModel()} korrigiert. Die Aufgabengrenzen und Zahlen stammen weiterhin aus dem Originaldokument.`);
+        if (!repaired && skipped) warnings.push("Die visuelle Mathekorrektur war aktiviert, aber bei den erkannten Aufgaben wurden keine typischen Schäden der PDF-Textschicht gefunden.");
+      }
+    }
+
+    // Stage 1 duplicate retrieval is local/deterministic and searches every topic/competence of the
+    // class. Semantic Groq reranking happens after the per-task metadata pass.
     drafts = await addDuplicateCandidates(drafts);
+
+    if (useLlm && !llmConfigured()) warnings.push("KI-Analyse wurde angefordert, aber GROQ_API_KEY ist nicht gesetzt. Heuristische Metadaten werden verwendet.");
+
     return NextResponse.json({
       drafts,
       warnings,
-      sourceSummary: sources.map((s) => ({ name: s.name, characters: s.text.length, images: s.images.length, method: s.extractionMethod })),
+      sourceSummary: sources.map((s) => ({ name: s.name, characters: s.text.length, blocks: s.blocks.length, images: s.images.length, method: s.mimeType === "application/pdf" ? "PDF-Blöcke" : "DOCX-Blöcke" })),
       analysisMode: "heuristic",
       llmRequested: useLlm && llmConfigured(),
     });

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAdminRequest } from "@/lib/adminAuth";
 import type { ImportDraft } from "@/lib/adminTypes";
-import { addDuplicateCandidates } from "@/lib/duplicateCheck";
+import { addDuplicateCandidates, rerankDuplicateCandidates } from "@/lib/duplicateCheck";
 import { analyzeDraftWithLlm, GroqAnalysisError, llmConfigured } from "@/lib/llmAnalysis";
 
 export const runtime = "nodejs";
@@ -15,7 +15,13 @@ export async function POST(request: NextRequest) {
     const body = await request.json() as { draft?: ImportDraft; classLevel?: string; topic?: string };
     if (!body.draft?.id) return NextResponse.json({ error: "Keine Aufgabe übergeben." }, { status: 400 });
     const analyzed = await analyzeDraftWithLlm(body.draft, body.classLevel, body.topic);
-    const [withDuplicate] = await addDuplicateCandidates([{ ...analyzed, duplicate: undefined }]);
+    // The import request already searched every topic/competence in the class. Reuse those candidates
+    // here so each Groq metadata request does not trigger dozens of fresh Notion queries.
+    if (analyzed.duplicates?.length) {
+      const withDuplicate = await rerankDuplicateCandidates(analyzed);
+      return NextResponse.json({ draft: withDuplicate });
+    }
+    const [withDuplicate] = await addDuplicateCandidates([{ ...analyzed, duplicate: undefined }], { llmRerank: true });
     return NextResponse.json({ draft: withDuplicate });
   } catch (error) {
     if (error instanceof GroqAnalysisError) {

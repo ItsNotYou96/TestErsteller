@@ -1,299 +1,78 @@
 import { randomUUID } from "node:crypto";
-import * as mammoth from "mammoth";
-import "pdf-parse/worker";
-import { PDFParse } from "pdf-parse";
-import JSZip from "jszip";
 import type { Competence } from "./types";
 import type { ImportDraft } from "./adminTypes";
 import { LEGACY_TOPICS_BY_CLASS } from "./wpfDatabaseMap";
 import { parsePointsSpec } from "./taskParsing";
+import { parseDocumentFile, type DocumentBlock, type DocumentSource } from "./documentBlocks";
+import { segmentDocument, type TaskBlockGroup } from "./taskSegmentation";
 
-export interface ParsedSource {
-  name: string;
-  mimeType: string;
-  text: string;
-  simplified: string;
-  images: Array<{ dataUrl: string; name: string; decorative?: boolean }>;
-  expectationRows: Array<{ title: string; expectation: string; pointsRaw: string }>;
-  pages?: Array<{ pageNumber: number; text: string }>;
-  bytes: Buffer;
+export type ParsedSource = DocumentSource;
+export { parseDocumentFile as parseUploadedFile };
+
+function normalizeCircled(value: string) {
+  const chars = "①②③④⑤⑥⑦⑧⑨⑩";
+  return value.replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, (c) => `${chars.indexOf(c) + 1}.`);
 }
 
-function xmlText(fragment: string) {
-  return decodeEntities(
-    fragment
-      .replace(/<(?:w:t|m:t)\b[^>]*>([\s\S]*?)<\/(?:w:t|m:t)>/gi, "$1")
-      .replace(/<w:tab\b[^>]*\/?>(?:<\/w:tab>)?/gi, "\t")
-      .replace(/<w:br\b[^>]*\/?>(?:<\/w:br>)?/gi, "\n")
-      .replace(/<[^>]+>/g, "")
-  );
-}
-
-function mathAwareParagraph(fragment: string) {
-  let value = fragment;
-  // Preserve the most common OMML structures in a readable, LaTeX-like form before stripping XML.
-  value = value.replace(/<m:f\b[^>]*>([\s\S]*?)<\/m:f>/gi, (_all, inner) => {
-    const num = inner.match(/<m:num\b[^>]*>([\s\S]*?)<\/m:num>/i)?.[1] || "";
-    const den = inner.match(/<m:den\b[^>]*>([\s\S]*?)<\/m:den>/i)?.[1] || "";
-    return `\\frac{${xmlText(num)}}{${xmlText(den)}}`;
-  });
-  value = value.replace(/<m:sSup\b[^>]*>([\s\S]*?)<\/m:sSup>/gi, (_all, inner) => {
-    const base = inner.match(/<m:e\b[^>]*>([\s\S]*?)<\/m:e>/i)?.[1] || "";
-    const sup = inner.match(/<m:sup\b[^>]*>([\s\S]*?)<\/m:sup>/i)?.[1] || "";
-    return `${xmlText(base)}^{${xmlText(sup)}}`;
-  });
-  value = value.replace(/<m:sSub\b[^>]*>([\s\S]*?)<\/m:sSub>/gi, (_all, inner) => {
-    const base = inner.match(/<m:e\b[^>]*>([\s\S]*?)<\/m:e>/i)?.[1] || "";
-    const sub = inner.match(/<m:sub\b[^>]*>([\s\S]*?)<\/m:sub>/i)?.[1] || "";
-    return `${xmlText(base)}_{${xmlText(sub)}}`;
-  });
-  value = value.replace(/<m:rad\b[^>]*>([\s\S]*?)<\/m:rad>/gi, (_all, inner) => {
-    const body = inner.match(/<m:e\b[^>]*>([\s\S]*?)<\/m:e>/i)?.[1] || inner;
-    return `\\sqrt{${xmlText(body)}}`;
-  });
-  return xmlText(value).replace(/[ \t]+/g, " ").trim();
-}
-
-async function docxTextWithMath(bytes: Buffer) {
-  try {
-    const zip = await JSZip.loadAsync(bytes);
-    const xml = await zip.file("word/document.xml")?.async("string");
-    if (!xml) return "";
-    const paragraphs = Array.from(xml.matchAll(/<w:p\b[^>]*>([\s\S]*?)<\/w:p>/gi));
-    return paragraphs.map((match) => mathAwareParagraph(match[1])).filter(Boolean).join("\n");
-  } catch { return ""; }
-}
-
-function decodeEntities(value: string) {
-  return value
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number(dec)));
-}
-
-function stripHtml(value: string) {
-  return decodeEntities(value.replace(/<br\s*\/?\s*>/gi, "\n").replace(/<\/p>/gi, "\n").replace(/<[^>]+>/g, "").replace(/\n{3,}/g, "\n\n").trim());
-}
-
-function expectationRowsFromHtml(html: string) {
-  const tables = Array.from(html.matchAll(/<table\b[^>]*>([\s\S]*?)<\/table>/gi));
-  for (const table of tables) {
-    const rows = Array.from(table[1].matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)).map((row) =>
-      Array.from(row[1].matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi)).map((cell) => stripHtml(cell[1])),
-    );
-    if (!rows.length) continue;
-    const header = rows[0].join(" ").toLowerCase();
-    if (!header.includes("erwartung") || !header.includes("punkte")) continue;
-    return rows.slice(1).filter((r) => r.length >= 2 && r[0]).map((r) => ({ title: r[0].trim(), expectation: (r[1] || "").trim(), pointsRaw: (r[2] || "").trim() }));
-  }
-  return [] as Array<{ title: string; expectation: string; pointsRaw: string }>;
-}
-
-function htmlToSimplified(html: string) {
-  return decodeEntities(
-    html
-      .replace(/<img\b[^>]*data-import-image=["'](\d+)["'][^>]*>/gi, "\n[[IMG:$1]]\n")
-      .replace(/<br\s*\/?\s*>/gi, "\n")
-      .replace(/<\/(p|div|li|h[1-6]|tr)>/gi, "\n")
-      .replace(/<[^>]+>/g, "")
-      .replace(/\r/g, "")
-      .replace(/[ \t]+\n/g, "\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim(),
-  );
-}
-
-
-function repairCommonPdfMathText(value: string) {
-  const normalized = value
-    .replace(/[⋅×]/g, " \\cdot ")
-    .replace(/÷/g, " \\div ")
-    .replace(/[−–—]/g, "-")
-    .replace(/[\u200B\uFEFF]/g, "");
-
-  const lines = normalized.replace(/\r/g, "").split("\n");
-  const out: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const next = lines[i + 1] || "";
-
-    // Typical PDF text layer for a displayed fraction: visual 3/4 x becomes
-    // "d) 4" + newline + "3 x..." (denominator emitted before numerator).
-    const labeledDen = line.match(/^(\s*\*?[a-z]\)\s*)(\d{1,3})\s*$/i);
-    const nextNumRest = next.match(/^\s*(\d{1,3})\s+(.+)$/);
-    if (labeledDen && nextNumRest && /[a-z=+\-*/:^()]/i.test(nextNumRest[2])) {
-      let rest = nextNumRest[2];
-      const nextAfter = lines[i + 2] || "";
-      const mixedDen = rest.match(/^(.*[=+\-*/:]\s*.*?)(\d{1,2})\s*$/);
-      const mixedNum = nextAfter.match(/^\s*(\d{1,2})\s*$/);
-      if (mixedDen && mixedNum && /\d/.test(mixedDen[1])) {
-        rest = `${mixedDen[1]}\\frac{${mixedNum[1]}}{${mixedDen[2]}}`;
-        i++;
-      }
-      out.push(`${labeledDen[1]}\\frac{${nextNumRest[1]}}{${labeledDen[2]}} ${rest}`.trimEnd());
-      i++;
-      continue;
-    }
-
-    // Mixed number at the end of a mathematical line, e.g. visual -5 1/2 may be emitted as
-    // "... = - 5 2" + newline + "1". Only apply when the line is clearly mathematical.
-    const trailingDen = line.match(/^(.*[=+\-*/:]\s*.*?)(\d{1,2})\s*$/);
-    const nextNumOnly = next.match(/^\s*(\d{1,2})\s*$/);
-    if (trailingDen && nextNumOnly && /\d/.test(trailingDen[1])) {
-      out.push(`${trailingDen[1]}\\frac{${nextNumOnly[1]}}{${trailingDen[2]}}`.trimEnd());
-      i++;
-      continue;
-    }
-
-    out.push(line);
-  }
-  return out.join("\n");
-}
-
-export async function parseUploadedFile(file: File): Promise<ParsedSource> {
-  const bytes = Buffer.from(await file.arrayBuffer());
-  const name = file.name || "Dokument";
-  const ext = name.toLowerCase().split(".").pop();
-
-  if (ext === "docx" || file.type.includes("wordprocessingml")) {
-    const images: Array<{ dataUrl: string; name: string; decorative?: boolean }> = [];
-    const htmlResult = await mammoth.convertToHtml(
-      { buffer: bytes },
-      {
-        convertImage: mammoth.images.imgElement(async (image) => {
-          const index = images.length;
-          const base64 = await image.read("base64");
-          const contentType = image.contentType || "image/png";
-          const imageName = `${name.replace(/\.docx$/i, "")}-bild-${index + 1}.${contentType.includes("jpeg") ? "jpg" : contentType.split("/")[1] || "png"}`;
-          images.push({ dataUrl: `data:${contentType};base64,${base64}`, name: imageName });
-          return { src: `about:blank`, "data-import-image": String(index) } as any;
-        }),
-      },
-    );
-    const counts = new Map<string, number>();
-    for (const image of images) counts.set(image.dataUrl, (counts.get(image.dataUrl) || 0) + 1);
-    for (const image of images) image.decorative = (counts.get(image.dataUrl) || 0) > 1;
-    const raw = await mammoth.extractRawText({ buffer: bytes });
-    const mathText = await docxTextWithMath(bytes);
-    return {
-      name,
-      mimeType: file.type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      text: mathText.length >= (raw.value || "").length * 0.8 ? mathText : (raw.value || ""),
-      simplified: htmlToSimplified(htmlResult.value || "") || raw.value || "",
-      images,
-      expectationRows: expectationRowsFromHtml(htmlResult.value || ""),
-      bytes,
-    };
-  }
-
-  if (ext === "pdf" || file.type === "application/pdf") {
-    const parser = new PDFParse({ data: Uint8Array.from(bytes) });
-    try {
-      const initial = await parser.getText({ pageJoiner: "" });
-      const rawPages = Array.isArray((initial as any).pages) ? (initial as any).pages : [];
-      const pages: Array<{ pageNumber: number; text: string }> = rawPages.length
-        ? rawPages.map((page: any, index: number) => ({
-            pageNumber: Number(page.num || index + 1),
-            text: repairCommonPdfMathText(String(page.text || "")).trim(),
-          }))
-        : [{ pageNumber: 1, text: repairCommonPdfMathText(String(initial.text || "")).trim() }];
-      const imageResult = await parser.getImage({ imageThreshold: 80, imageDataUrl: true, imageBuffer: false }).catch(() => undefined);
-      const images = (imageResult?.pages || []).flatMap((page: any) => (page.images || []).map((image: any, index: number) => ({
-        dataUrl: String(image.dataUrl || ""),
-        name: `${name.replace(/\.pdf$/i, "")}-seite-${page.pageNumber || 1}-bild-${index + 1}.png`,
-        decorative: false,
-      }))).filter((image: any) => image.dataUrl && image.dataUrl.length <= 350_000);
-      const text = pages.map((page) => page.text).filter(Boolean).join("\n\n");
-      const simplified = pages.map((page) => `[[PAGE:${page.pageNumber}]]\n${page.text}`).join("\n");
-      return { name, mimeType: "application/pdf", text, simplified, images, expectationRows: [], pages, bytes };
-    } finally {
-      await parser.destroy();
-    }
-  }
-
-  throw new Error(`${name}: Nur PDF- und DOCX-Dateien werden unterstützt.`);
-}
-
-function taskNumberFromHeading(raw: string) {
-  const normal = raw.replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, (c) => String("①②③④⑤⑥⑦⑧⑨⑩".indexOf(c) + 1));
-  const match = normal.match(/^\s*(?:Aufgabe\s*)?(\d{1,2})\b/i);
-  return match?.[1] || "";
-}
-
-function cleanTaskHeading(raw: string) {
-  return raw
-    .replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, (c) => String("①②③④⑤⑥⑦⑧⑨⑩".indexOf(c) + 1))
-    .replace(/^\s*(?:Aufgabe\s*)?\d{1,2}\s*[:.)\-–]?\s*/i, "")
-    .replace(/^\s*\(\s*(?:je\s*)?\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*\s*(?:P\.?|BE)\s*\)\s*/i, "")
-    .replace(/\s*\(\s*\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*\s*(?:P\.?|BE)\s*\)\s*$/i, "")
-    .replace(/\s+/g, " ")
+function stripTaskPrefix(value: string) {
+  return normalizeCircled(value)
+    .replace(/^\s*Aufgabe\s*\d{1,2}\s*[:.)\-–]?\s*/i, "")
+    .replace(/^\s*\d{1,2}\s*[:.)\-–]\s*/, "")
+    .replace(/^\s*\d{1,2}\s+(?=\()/i, "")
+    .replace(/^\s*\(\s*(?:je\s*)?\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*\s*(?:BE|P(?:\.|unkte?)?)\s*\)\s*/i, "")
     .trim();
 }
 
-function titleFromChunk(chunk: string, heading: string, taskNumber: string) {
-  const cleanedHeading = cleanTaskHeading(heading);
-  const cleanedChunk = cleanTaskHeading(chunk.replace(/\n+/g, " "));
-  const source = cleanedHeading.length >= 5 ? cleanedHeading : cleanedChunk;
-  const lower = source.toLowerCase();
-  const combinedLower = cleanedChunk.toLowerCase();
-
-  if (/magisch(?:es|en)?\s+quadrat/.test(combinedLower)) return "Magisches Quadrat";
-  if (/subtraktionsmauer/.test(combinedLower)) return "Subtraktionsmauer";
-  if (/gemischte aufgaben/.test(combinedLower)) return "Gemischte Aufgaben";
-  if (/ordne der größe nach/.test(combinedLower)) return "Zahlen der Größe nach ordnen";
-  if (/beträge/.test(combinedLower) && /ordne/.test(combinedLower)) return "Beträge ordnen";
-  if (/säulendiagramm/.test(combinedLower) && /boxplot/.test(combinedLower)) return "Säulendiagramm und Boxplot";
-  if (/boxplot/.test(combinedLower)) return "Boxplot";
-
-  const firstSentence = source.split(/(?<=[.!?])\s+/)[0]
-    .replace(/^(?:bei|ergänze|berechne|bestimme|ordne|gib|zeichne|untersuche|löse)\s+/i, "")
-    .trim();
-  if (firstSentence.length >= 4 && firstSentence.length <= 70) return firstSentence.replace(/[.:;!?]+$/, "");
-  if (firstSentence.length > 70) return `${firstSentence.slice(0, 67).trim()}…`;
-  return `Aufgabe ${taskNumber || ""}`.trim();
+function partLabels(text: string) {
+  return Array.from(text.matchAll(/(?:^|\s|\n)\*?([a-z])\)\s*/gi)).map((m) => m[1].toLowerCase());
 }
 
-function pointsFromChunk(chunk: string, heading: string) {
-  const normalized = chunk.replace(/\r/g, "");
-  const lineMarkers = Array.from(normalized.matchAll(/(?:^|\n)\s*(?:Aufgabe\s*)?\d{0,2}\s*[:.)\-–]?\s*\(\s*(je\s*)?(\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*)\s*(?:P\.?|BE)\s*\)/gi));
-  const markers = lineMarkers.map((m) => ({ each: Boolean(m[1]), raw: m[2].replace(/\s+/g, "") }));
+function pointsFromTask(text: string, heading: string) {
+  const source = text.replace(/\r/g, "");
+  const max = source.match(/\(\s*max\.?\s*(\d+(?:[.,]\d+)?)\s*(?:BE|P(?:\.|unkte?)?)?\s*\)/i)?.[1];
 
-  if (markers.length) {
-    const first = markers[0];
-    if (first.each && !first.raw.includes("+")) {
-      const count = new Set(Array.from(chunk.matchAll(/^[\s\u200B\uFEFF]*[*]?([a-z])\)\s*/gim)).map((m) => m[1].toLowerCase())).size;
-      if (count > 1) return Array.from({ length: count }, () => first.raw).join("+");
-    }
-    // A later line such as "(6 P.) ..." usually denotes another subpart of the same numbered task.
-    // Keep all such point blocks so task 4 in the sample becomes 6+6 and task 5 becomes 3+10.
-    return markers.map((m) => m.raw).join("+");
+  // Exact subtask point labels, independent of spaces/line breaks: a)(1BE), *c) (2 P.), etc.
+  const sub = Array.from(source.matchAll(/\*?[a-z]\)\s*\(?\s*(\d+(?:[.,]\d+)?)\s*(?:BE|P(?:\.|unkte?)?)\s*\)?/gi))
+    .map((m) => m[1].replace(",", "."));
+  if (sub.length >= 2) return `${sub.join("+")}${max ? ` (max. ${max.replace(",", ".")})` : ""}`;
+
+  const each = source.match(/\(\s*je\s*(\d+(?:[.,]\d+)?)\s*(?:BE|P(?:\.|unkte?)?)\s*\)/i)?.[1];
+  if (each) {
+    const labels = Array.from(new Set(partLabels(text))).sort();
+    const maxLabel = labels.reduce((max, label) => Math.max(max, label.charCodeAt(0) - 96), 0);
+    const count = maxLabel >= 2 && maxLabel <= 12 ? maxLabel : labels.length;
+    if (count > 1) return Array.from({ length: count }, () => each.replace(",", ".")).join("+");
   }
 
-  const inline = normalized.match(/\((\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*)\s*(?:P\.?|BE)?\)/i)
-    || normalized.match(/(\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*)\s*(?:P\.|BE)\b/i);
-  return inline ? inline[1].replace(/\s+/g, "") : "";
+  // A second points block belongs to the same numbered task only when it begins a fresh line.
+  // This handles layouts such as task 4 with two unlettered 6-P blocks without accidentally
+  // adding trailing document-wide form points like "Mathematische Korrektheit ... (3 BE)".
+  const headingPoint = heading.match(/\(\s*(\d+(?:[.,]\d+)?)\s*(?:BE|P(?:\.|unkte?)?)\s*\)/i)?.[1]?.replace(",", ".");
+  const standaloneMarkers = Array.from(source.matchAll(/(?:^|\n)\s*\(\s*(?!max\b)(?!je\b)(\d+(?:[.,]\d+)?)\s*(?:BE|P(?:\.|unkte?)?)\s*\)/gi)).map((m) => m[1].replace(",", "."));
+  if (headingPoint && standaloneMarkers.length) return [headingPoint, ...standaloneMarkers].join("+");
+  if (!headingPoint && standaloneMarkers.length >= 2) return standaloneMarkers.join("+");
+  if (headingPoint) return headingPoint;
+  if (standaloneMarkers[0]) return standaloneMarkers[0];
+  if (max) return max.replace(",", ".");
+  if (sub.length === 1) return sub[0];
+  return "";
 }
-
 
 function heuristicPointsRaw(text: string) {
-  const parts = Array.from(text.matchAll(/(?:^|\n)\s*\*?([a-z])\)\s*/gim));
-  if (parts.length) {
-    const values = parts.map((match, index) => {
-      const start = (match.index || 0) + match[0].length;
-      const end = index + 1 < parts.length ? (parts[index + 1].index || text.length) : text.length;
-      const chunk = text.slice(start, end).toLowerCase();
+  const labels = Array.from(new Set(partLabels(text)));
+  if (labels.length) {
+    return labels.map((label, index) => {
+      const marker = new RegExp(`(?:^|\\n|\\s)\\*?${label}\\)\\s*`, "i");
+      const start = text.search(marker);
+      const nextLabel = labels[index + 1];
+      const rest = start >= 0 ? text.slice(start) : text;
+      const end = nextLabel ? rest.search(new RegExp(`(?:^|\\n|\\s)\\*?${nextLabel}\\)\\s*`, "i")) : -1;
+      const chunk = (end > 0 ? rest.slice(0, end) : rest).toLowerCase();
       if (/begr(?:ü|u)nd|beweis|beurteil|bewert|erkl(?:ä|a)r|erl(?:ä|a)uter|analys|interpret|modellier/.test(chunk)) return 3;
       if (/zeichn|skizz|konstrui/.test(chunk) || chunk.length > 180) return 2;
-      // Pure calculations/equations usually need only one result point per short subtask.
       if (/[=+\-*/:^]/.test(chunk) && /\d/.test(chunk)) return 1;
       return 2;
-    });
-    return values.join("+");
+    }).join("+");
   }
   const lower = text.toLowerCase();
   if (/begr(?:ü|u)nd|beweis|beurteil|bewert|analys|interpret|modellier/.test(lower)) return "4";
@@ -301,35 +80,28 @@ function heuristicPointsRaw(text: string) {
   return "2";
 }
 
-function topicScores(text: string, classLevel: string) {
-  const keywords: Record<string, string[]> = {
-    "Terme": ["term", "variable", "klammer", "ausmultipl", "zusammenfass"],
-    "Rationale Zahlen": ["rational", "negative zahl", "zahlengerade", "bruch", "dezimal", "vorzeichen", "betrag"],
-    "Gleichungen": ["gleichung", "äquivalenz", "variable", "lösen"],
-    "Prozentrechnung": ["prozent", "grundwert", "prozentwert", "prozentsatz", "rabatt"],
-    "Zuordnung": ["zuordnung", "proportional", "dreisatz", "tabelle"],
-    "Terme & Gleichungen": ["term", "gleichung", "variable", "klammer", "äquivalenz"],
-    "Prozent- und Zinsrechnung": ["prozent", "zins", "kapital", "rabatt", "wachstumsfaktor"],
-    "Flächen": ["fläche", "flächeninhalt", "umfang", "dreieck", "viereck", "kreis"],
-    "Körper": ["volumen", "oberfläche", "prisma", "zylinder", "körper"],
-    "Statistik": ["median", "mittelwert", "boxplot", "histogramm", "daten", "diagramm", "säulendiagramm"],
-    "Funktionen": ["funktion", "graph", "steigung", "y-achse", "koordinatensystem"],
-    "Gleichungssysteme": ["gleichungssystem", "lgs", "einsetz", "additionsverfahren", "zwei gleichungen"],
-    "Lineare Funktionen": ["linear", "steigung", "y-achsenabschnitt", "funktionsgleichung", "gerade"],
-    "Potenzen": ["potenz", "exponent", "wurzel", "zehnerpotenz", "potenzgesetz"],
-    "Dreiecke": ["dreieck", "pythagoras", "thales", "winkel", "kongruenz"],
-    "Körper - Fortgeschritten": ["pyramide", "kegel", "kugel", "volumen", "oberfläche"],
-    "Quadratische Funktionen": ["quadratisch", "parabel", "scheitel", "nullstelle", "binom"],
-    "Exponentialfunktionen": ["exponential", "wachstum", "zerfall", "wachstumsfaktor", "halbwert"],
-    "Trigonometrie": ["sinus", "kosinus", "tangens", "trigonom", "winkel"],
-    "Wahrscheinlichkeitsrechnung": ["wahrscheinlichkeit", "baumdiagramm", "urne", "ereignis", "vierfelder", "zufall", "boxplot"],
-  };
-  const lower = text.toLowerCase();
-  return (LEGACY_TOPICS_BY_CLASS[classLevel] || []).map((topic) => ({
-    topic,
-    score: (keywords[topic] || []).reduce((sum, word) => sum + (lower.includes(word) ? 1 : 0), 0),
-  })).sort((a, b) => b.score - a.score);
-}
+const TOPIC_KEYWORDS: Record<string, string[]> = {
+  "Terme": ["term", "variable", "klammer", "ausmultipl", "zusammenfass"],
+  "Rationale Zahlen": ["rational", "negative zahl", "zahlengerade", "bruch", "dezimal", "vorzeichen", "betrag"],
+  "Gleichungen": ["gleichung", "äquivalenz", "variable", "lösen"],
+  "Prozentrechnung": ["prozent", "grundwert", "prozentwert", "prozentsatz", "rabatt"],
+  "Zuordnung": ["zuordnung", "proportional", "dreisatz", "tabelle"],
+  "Terme & Gleichungen": ["term", "gleichung", "variable", "klammer", "äquivalenz"],
+  "Prozent- und Zinsrechnung": ["prozent", "zins", "kapital", "rabatt", "wachstumsfaktor"],
+  "Flächen": ["fläche", "flächeninhalt", "umfang", "dreieck", "viereck", "kreis"],
+  "Körper": ["volumen", "oberfläche", "prisma", "zylinder", "körper"],
+  "Statistik": ["median", "mittelwert", "boxplot", "histogramm", "daten", "diagramm", "säulendiagramm"],
+  "Funktionen": ["funktion", "graph", "steigung", "y-achse", "koordinatensystem"],
+  "Gleichungssysteme": ["gleichungssystem", "lgs", "einsetz", "additionsverfahren", "zwei gleichungen"],
+  "Lineare Funktionen": ["linear", "steigung", "y-achsenabschnitt", "funktionsgleichung", "gerade"],
+  "Potenzen": ["potenz", "exponent", "wurzel", "zehnerpotenz", "potenzgesetz"],
+  "Dreiecke": ["dreieck", "pythagoras", "thales", "winkel", "kongruenz"],
+  "Körper - Fortgeschritten": ["pyramide", "kegel", "kugel", "volumen", "oberfläche"],
+  "Quadratische Funktionen": ["quadratisch", "parabel", "scheitel", "nullstelle", "binom"],
+  "Exponentialfunktionen": ["exponential", "wachstum", "zerfall", "wachstumsfaktor", "halbwert"],
+  "Trigonometrie": ["sinus", "kosinus", "tangens", "trigonom", "winkel"],
+  "Wahrscheinlichkeitsrechnung": ["wahrscheinlichkeit", "baumdiagramm", "urne", "ereignis", "vierfelder", "zufall", "boxplot"],
+};
 
 function guessClass(text: string, fallback?: string) {
   if (fallback && LEGACY_TOPICS_BY_CLASS[fallback]) return fallback;
@@ -338,16 +110,18 @@ function guessClass(text: string, fallback?: string) {
 }
 
 function guessTopic(text: string, classLevel: string, fallback?: string) {
-  if (fallback && (LEGACY_TOPICS_BY_CLASS[classLevel] || []).includes(fallback)) return fallback;
-  const scores = topicScores(text, classLevel);
-  return scores[0]?.score ? scores[0].topic : (LEGACY_TOPICS_BY_CLASS[classLevel] || [""])[0] || "";
+  const topics = LEGACY_TOPICS_BY_CLASS[classLevel] || [];
+  if (fallback && topics.includes(fallback)) return fallback;
+  const lower = text.toLowerCase();
+  const ranked = topics.map((topic) => ({ topic, score: (TOPIC_KEYWORDS[topic] || []).reduce((s, word) => s + (lower.includes(word) ? 1 : 0), 0) })).sort((a, b) => b.score - a.score);
+  return ranked[0]?.score ? ranked[0].topic : topics[0] || "";
 }
 
 function guessCompetence(text: string): Competence {
   const lower = text.toLowerCase();
   if (/begründe|beweise|widerlege|beurteile|bewerte|argument|analysiere.+aussage/.test(lower)) return "Argumentieren";
   if (/problem|strategie|systematisch probier|finde (?:alle|einen weg)|untersuche verschiedene lösungswege/.test(lower)) return "Problemlösen";
-  if (/sachverhalt|alltag|real(?:e|en)? situation|modell|interpretiere.+kontext|architekt|fahrstuhl|geschwindigkeit|kosten/.test(lower)) return "Modellieren";
+  if (/sachverhalt|alltag|real(?:e|en)? situation|modell|interpretiere.+kontext|architekt|fahrstuhl|geschwindigkeit|kosten|taschengeld|alter/.test(lower)) return "Modellieren";
   if (/zeichne|skizziere|stelle dar|diagramm|graph|koordinatensystem|zahlengerade|tabelle|darstellung|boxplot/.test(lower)) return "Darstellungen";
   if (/erkläre|beschreibe|erläutere|formuliere|präsentiere|kommuniz/.test(lower)) return "Kommunizieren";
   return "Mathematik";
@@ -361,96 +135,79 @@ function guessAfb(text: string) {
 }
 
 function estimatedTime(points: number, text: string) {
-  const partCount = (text.match(/^\s*[*]?[a-z]\)\s*/gim) || []).length;
+  const partCount = new Set(partLabels(text)).size;
   return Math.max(2, Math.round((points > 0 ? points * 1.8 : 4) + Math.max(0, partCount - 1)));
 }
 
-function normalizeCircledNumbers(value: string) {
-  const chars = "①②③④⑤⑥⑦⑧⑨⑩";
-  return value.replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, (c) => String(chars.indexOf(c) + 1));
+function titleFromGroup(group: TaskBlockGroup) {
+  const first = group.blocks.find((b) => b.kind === "paragraph" || b.kind === "table");
+  if (!first) return "Aufgabe";
+  let title = stripTaskPrefix(first.text)
+    .replace(/\(\s*(?:max\.?\s*)?(?:je\s*)?\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*\s*(?:BE|P(?:\.|unkte?)?)?\s*\)\s*/gi, "")
+    .trim();
+  const firstSentence = title.split(/(?<=[.!?])\s+/)[0] || title;
+  if (firstSentence.length <= 72) return firstSentence.replace(/[.:]+$/, "").trim() || "Aufgabe";
+  return `${firstSentence.slice(0, 69).trim()}…`;
 }
 
-function isTaskStartLine(line: string) {
-  const value = normalizeCircledNumbers(line).trim();
-  if (/^Aufgabe\s*\d{1,2}\s*[:.)\-–]?/i.test(value)) return true;
 
-  // Common worksheet/PDF layout: "1 (7 P.) ..." or "3 (Je 2 P.) ...".
-  if (/^\d{1,2}\s*[:.)\-–]?\s*\(\s*(?:je\s*)?\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*\s*(?:P\.?|BE)\s*\)/i.test(value)) return true;
-
-  // Very common worksheets do not put points into the heading at all:
-  // "1. Drücke ...", "2. Berechne ...", "10. Von drei Brüdern ...".
-  // A whitespace after the punctuation prevents dates/decimals such as 25.02.2019.
-  // Exclusions protect headings such as "4. Klassenarbeit" from becoming a task.
-  if (/^\d{1,2}\s*[:.)]\s+(?!Klassenarbeit\b|Klausur\b|Test\b|Teil\b|Seite\b|Klasse\b|Jahrgang(?:sstufe)?\b)(?![÷×·+=<>−-])\S/i.test(value)) return true;
-
-  return false;
+function rawTextFromGroup(group: TaskBlockGroup) {
+  return group.blocks
+    .filter((block) => block.kind !== "page-break" && block.kind !== "image")
+    .map((block) => `${block.listLabel && (block.listLevel || 0) > 0 ? `${block.listLabel} ` : ""}${block.text}`)
+    .join("\n")
+    .trim();
 }
 
-function taskChunks(text: string) {
-  const rawLines = normalizeCircledNumbers(text).replace(/\r/g, "").split("\n");
-  const lines: Array<{ text: string; page?: number }> = [];
-  let currentPage: number | undefined;
-  for (const raw of rawLines) {
-    const marker = raw.match(/^\s*\[\[PAGE:(\d+)\]\]\s*$/i);
-    if (marker) { currentPage = Number(marker[1]); continue; }
-    lines.push({ text: raw, page: currentPage });
-  }
-
-  const starts: number[] = [];
-  for (let i = 0; i < lines.length; i++) if (isTaskStartLine(lines[i].text)) starts.push(i);
-  if (!starts.length) return [] as Array<{ text: string; pages: number[] }>;
-
-  return starts.map((start, index) => {
-    const slice = lines.slice(start, starts[index + 1] ?? lines.length);
-    const pages = Array.from(new Set(slice.map((line) => line.page).filter((page): page is number => Number.isInteger(page))));
-    const chunk = slice.map((line) => line.text).join("\n").trim()
-      // Remove recurring page footer/header debris that otherwise becomes part of the final task.
-      .replace(/^\s*Mathematik\s+.*Seite\s+\d+\/\d+\s*$/gim, "")
-      .replace(/^\s*Angaben zu den Urhebern.*$/gim, "")
-      .replace(/^\s*https?:\/\/www\.tutory\.de\/.*$/gim, "")
-      .replace(/^\s*Name:\s+.*$/gim, "")
-      .replace(/\n{3,}/g, "\n\n")
+function questionFromGroup(group: TaskBlockGroup) {
+  const lines: string[] = [];
+  for (let i = 0; i < group.blocks.length; i++) {
+    const block = group.blocks[i];
+    if (block.kind === "page-break" || block.kind === "image") continue;
+    let text = block.text.trim();
+    if (!text) continue;
+    if (i === 0 || block.id === group.startBlockId) text = stripTaskPrefix(text);
+    else if (block.listLabel && (block.listLevel || 0) > 0) text = `${block.listLabel} ${text}`;
+    // Point labels are metadata, not part of the mathematical wording.
+    text = text
+      .replace(/(\*?[a-z]\))\s*\(\s*\d+(?:[.,]\d+)?\s*(?:BE|P(?:\.|unkte?)?)\s*\)/gi, "$1 ")
+      .replace(/\(\s*max\.?\s*\d+(?:[.,]\d+)?\s*(?:BE|P(?:\.|unkte?)?)?\s*\)/gi, "")
+      .replace(/\s{2,}/g, " ")
       .trim();
-    return { text: chunk, pages };
-  }).filter((chunk) => Boolean(chunk.text));
+    if (text) lines.push(text);
+  }
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-function stripImageMarkers(text: string) {
-  const indices = Array.from(text.matchAll(/\[\[IMG:(\d+)\]\]/g)).map((m) => Number(m[1]));
-  return { text: text.replace(/\n?\[\[IMG:\d+\]\]\n?/g, "\n").replace(/\n{3,}/g, "\n\n").trim(), indices };
+function pagesFromGroup(group: TaskBlockGroup) {
+  return Array.from(new Set(group.blocks.map((b) => b.page).filter((p): p is number => Number.isInteger(p))));
 }
 
-export function heuristicDrafts(sources: ParsedSource[], defaultClass?: string, defaultTopic?: string): ImportDraft[] {
+function imageFromGroup(source: DocumentSource, group: TaskBlockGroup) {
+  const imageBlock = group.blocks.find((b) => b.kind === "image" && Number.isInteger(b.imageIndex));
+  if (imageBlock?.imageIndex !== undefined) return source.images[imageBlock.imageIndex];
+  return undefined;
+}
+
+export async function draftsFromSources(sources: ParsedSource[], defaultClass?: string, defaultTopic?: string, useLlmStructure = true) {
   const drafts: ImportDraft[] = [];
+  const warnings: string[] = [];
   for (const source of sources) {
-    const chunks = taskChunks(source.simplified || source.text);
-    for (const chunkInfo of chunks) {
-      const chunk = chunkInfo.text;
-      const firstLine = chunk.split("\n").find((x) => x.trim()) || "Aufgabe";
-      const { text, indices } = stripImageMarkers(chunk);
-      const bodyLines = text.split("\n");
-      const heading = bodyLines.shift() || firstLine;
-      const taskNumber = taskNumberFromHeading(heading);
-      const documentPointsRaw = pointsFromChunk(text, heading);
-      const pointsRaw = documentPointsRaw || heuristicPointsRaw(text);
+    const segmented = await segmentDocument(source, useLlmStructure);
+    warnings.push(...segmented.warnings.map((warning) => `${source.name}: ${warning}`));
+    for (const group of segmented.groups) {
+      const rawTaskText = rawTextFromGroup(group);
+      const questionText = questionFromGroup(group);
+      if (!questionText) continue;
+      const title = group.titleHint?.trim() || titleFromGroup(group);
+      const firstBlock = group.blocks.find((b) => b.kind !== "page-break" && b.kind !== "image");
+      const heading = firstBlock?.text || title;
+      const documentPointsRaw = pointsFromTask(rawTaskText, heading);
+      const pointsRaw = documentPointsRaw || heuristicPointsRaw(questionText);
       const maxPoints = parsePointsSpec(pointsRaw).maxPoints || 0;
-      const classLevel = guessClass(`${source.name}\n${text}`, defaultClass);
-      const topic = guessTopic(text, classLevel, defaultTopic);
-      const title = titleFromChunk(text, heading, taskNumber) || `Aufgabe ${taskNumber || drafts.length + 1}`;
-      const cleanedFirstLine = cleanTaskHeading(heading);
-      const explicitHeading = /^\s*Aufgabe\s*\d+/i.test(heading);
-      const questionText = ([explicitHeading ? "" : cleanedFirstLine, ...bodyLines].join("\n")
-        .replace(/(?:^|\n)\s*\(\s*(?:je\s*)?\d+(?:[.,]\d+)?(?:\s*\+\s*\d+(?:[.,]\d+)?)*\s*(?:P\.?|BE)\s*\)\s*/gi, "\n")
-        .replace(/^\s+|\s+$/g, "")
-        .replace(/\n{3,}/g, "\n\n")
-        .trim()) || cleanTaskHeading(text);
-      const imageIndex = indices.find((i) => source.images[i] && !source.images[i].decorative);
-      const visualHint = /zeichne|skizziere|abbild|diagramm|zahlengerade|koordinatensystem|graph|bild/i.test(`${title} ${questionText}`);
-      const foundImage = Number.isInteger(imageIndex)
-        ? source.images[imageIndex as number]
-        : (source.mimeType === "application/pdf" && source.images.length === 1 && visualHint ? source.images[0] : undefined);
-      // Keep the API response safely below Vercel's 4.5 MB response limit. Larger images can still be selected manually in review.
-      const image = foundImage && foundImage.dataUrl.length <= 350_000 ? foundImage : undefined;
+      const classLevel = guessClass(`${source.name}\n${source.text}`, defaultClass);
+      const topic = guessTopic(`${title}\n${questionText}`, classLevel, defaultTopic);
+      const image = imageFromGroup(source, group);
       drafts.push({
         id: randomUUID(),
         sourceFile: source.name,
@@ -465,11 +222,14 @@ export function heuristicDrafts(sources: ParsedSource[], defaultClass?: string, 
         pointsSource: documentPointsRaw ? "document" : "heuristic",
         estimatedTime: estimatedTime(maxPoints, questionText),
         expectation: "",
-        imageDataUrl: image?.dataUrl,
+        imageDataUrl: image?.dataUrl && image.dataUrl.length <= 350_000 ? image.dataUrl : undefined,
         imageName: image?.name,
         include: true,
         analysisMode: "heuristic",
-        sourcePages: chunkInfo.pages,
+        sourcePages: pagesFromGroup(group),
+        sourceBlockIds: group.blocks.filter((b) => b.kind !== "page-break").map((b) => b.id),
+        segmentationMode: group.mode,
+        segmentationConfidence: group.confidence,
         mathRepair: "none",
         confidence: { topic: 0.45, competence: 0.4, afb: 0.35, time: 0.45, expectation: 0 },
       });
@@ -486,11 +246,19 @@ export function heuristicDrafts(sources: ParsedSource[], defaultClass?: string, 
     });
     if (!row) continue;
     draft.expectation = row.expectation;
-    if (!draft.pointsRaw && row.pointsRaw) {
+    if (row.pointsRaw && draft.pointsSource !== "document") {
       draft.pointsRaw = row.pointsRaw.replace(/\s+/g, "");
       draft.maxPoints = parsePointsSpec(draft.pointsRaw).maxPoints || draft.maxPoints;
+      draft.pointsSource = "document";
     }
     draft.confidence = { ...(draft.confidence || { topic: .45, competence: .4, afb: .35, time: .45, expectation: 0 }), expectation: row.expectation ? .95 : 0 };
   }
-  return drafts;
+  return { drafts, warnings };
+}
+
+// Backwards-compatible helper for code/tests that still call the old name. It intentionally uses
+// deterministic segmentation only; the admin import route uses draftsFromSources so Groq can be used
+// for ambiguous document structures.
+export function heuristicDrafts(sources: ParsedSource[], defaultClass?: string, defaultTopic?: string): ImportDraft[] {
+  throw new Error("heuristicDrafts wurde in Importer v3 durch draftsFromSources ersetzt.");
 }

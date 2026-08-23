@@ -168,25 +168,43 @@ function authHeaders() {
   };
 }
 
+function sleep(ms: number) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+async function notionFetch(url: string, init: RequestInit = {}) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const response = await fetch(url, init);
+    if (response.status !== 429 && response.status < 500) return response;
+    if (attempt === 3) return response;
+    const retryAfter = Number(response.headers.get("retry-after") || "");
+    const wait = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : (attempt + 1) * 800;
+    await sleep(wait);
+  }
+  throw new Error("Notion-Anfrage konnte nicht ausgeführt werden.");
+}
+
+const dataSourceIdCache = new Map<string, string[]>();
+
 async function resolveDataSourceIds(databaseOrDataSourceId: string): Promise<string[]> {
   const id = normalizeDbId(databaseOrDataSourceId);
-  const dbRes = await fetch(`https://api.notion.com/v1/databases/${id}`, {
+  const cached = dataSourceIdCache.get(id);
+  if (cached) return cached;
+  const dbRes = await notionFetch(`https://api.notion.com/v1/databases/${id}`, {
     headers: authHeaders(),
     cache: "no-store",
   });
   if (dbRes.ok) {
     const db = await dbRes.json();
     const ids = (db.data_sources || []).map((x: any) => x.id).filter(Boolean);
-    if (ids.length) return ids;
+    if (ids.length) { dataSourceIdCache.set(id, ids); return ids; }
   }
 
   // Die feste WPF-Zuordnung enthält Database-IDs. Direkte Data-Source-IDs
   // bleiben für benutzerdefinierte Overrides ebenfalls unterstützt.
-  const dsRes = await fetch(`https://api.notion.com/v1/data_sources/${id}`, {
+  const dsRes = await notionFetch(`https://api.notion.com/v1/data_sources/${id}`, {
     headers: authHeaders(),
     cache: "no-store",
   });
-  if (dsRes.ok) return [id];
+  if (dsRes.ok) { dataSourceIdCache.set(id, [id]); return [id]; }
 
   const dbText = await dbRes.text().catch(() => "");
   const dsText = await dsRes.text().catch(() => "");
@@ -197,7 +215,7 @@ async function queryDataSource(dataSourceId: string): Promise<any[]> {
   const pages: any[] = [];
   let cursor: string | undefined;
   do {
-    const res = await fetch(`https://api.notion.com/v1/data_sources/${normalizeDbId(dataSourceId)}/query`, {
+    const res = await notionFetch(`https://api.notion.com/v1/data_sources/${normalizeDbId(dataSourceId)}/query`, {
       method: "POST",
       headers: authHeaders(),
       body: JSON.stringify({ page_size: 100, result_type: "page", ...(cursor ? { start_cursor: cursor } : {}) }),

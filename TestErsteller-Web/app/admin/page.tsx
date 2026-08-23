@@ -34,7 +34,7 @@ export default function AdminPage() {
   const [drafts, setDrafts] = useState<ImportDraft[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [sourceSummary, setSourceSummary] = useState<Array<{ name: string; characters: number; images: number; method?: string }>>([]);
+  const [sourceSummary, setSourceSummary] = useState<Array<{ name: string; characters: number; blocks?: number; images: number; method?: string }>>([]);
   const [history, setHistory] = useState<ImportHistoryEntry[]>([]);
   const [editQuestionSource, setEditQuestionSource] = useState(false);
   const [editExpectationSource, setEditExpectationSource] = useState(false);
@@ -228,13 +228,22 @@ export default function AdminPage() {
     return 0;
   }
 
+
+  function duplicateLabel(relation?: string) {
+    if (relation === "near_duplicate") return "Sehr ähnliche Variante";
+    if (relation === "same_skill") return "Gleicher Aufgabentyp";
+    if (relation === "related") return "Inhaltlich verwandt";
+    if (relation === "not_related") return "Nicht ähnlich";
+    return "Mögliche Ähnlichkeit";
+  }
+
   function patchDraft(id: string, patch: Partial<ImportDraft>) {
     setDrafts((prev) => prev.map((draft) => draft.id === id ? { ...draft, ...patch } : draft));
   }
 
   function changeClass(draft: ImportDraft, classLevel: string) {
     const topics = LEGACY_TOPICS_BY_CLASS[classLevel] || [];
-    patchDraft(draft.id, { classLevel, topic: topics.includes(draft.topic) ? draft.topic : topics[0] || "", duplicate: undefined, duplicates: undefined });
+    patchDraft(draft.id, { classLevel, topic: topics.includes(draft.topic) ? draft.topic : topics[0] || "", duplicate: undefined, duplicates: undefined, duplicatePool: undefined });
   }
 
   async function addImage(draft: ImportDraft, file?: File) {
@@ -368,7 +377,7 @@ export default function AdminPage() {
         </div>
         {message && <div className="adminMessage">{message}</div>}
         {warnings.map((warning, i) => <div className="adminWarning" key={i}><AlertTriangle size={16} />{warning}</div>)}
-        {sourceSummary.length > 0 && <div className="adminSourceSummary">{sourceSummary.map((x) => <span key={x.name}><b>{x.name}</b> · {x.characters.toLocaleString("de-DE")} Zeichen · {x.images} Bilder{x.method ? ` · ${x.method === "groq-math" ? "PDF-Text + Formelkorrektur" : x.method === "pdf-text" ? "PDF-Text" : "DOCX"}` : ""}</span>)}</div>}
+        {sourceSummary.length > 0 && <div className="adminSourceSummary">{sourceSummary.map((x) => <span key={x.name}><b>{x.name}</b> · {x.characters.toLocaleString("de-DE")} Zeichen{x.blocks ? ` · ${x.blocks} Dokumentblöcke` : ""} · {x.images} Bilder{x.method ? ` · ${x.method}` : ""}</span>)}</div>}
       </section>
 
       {drafts.length > 0 && (
@@ -382,7 +391,7 @@ export default function AdminPage() {
               {drafts.map((draft, index) => (
                 <button key={draft.id} className={`adminDraftCard ${selected?.id === draft.id ? "active" : ""} ${!draft.include ? "excluded" : ""}`} onClick={() => setSelectedId(draft.id)}>
                   <span className="adminDraftIndex">{index + 1}</span>
-                  <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P.{draft.pointsSource === "heuristic" ? " (geschätzt)" : ""} · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}{draft.mathRepair === "visual" ? " · Mathe visuell korrigiert" : draft.mathRepair === "rejected" ? " · Mathe-Korrektur verworfen" : ""}</small></span>
+                  <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P.{draft.pointsSource === "heuristic" ? " (geschätzt)" : ""} · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}{draft.segmentationConfidence ? ` · Struktur ${Math.round(draft.segmentationConfidence * 100)}%` : ""}{draft.mathRepair === "visual" ? " · Mathe visuell korrigiert" : draft.mathRepair === "rejected" ? " · Mathe-Korrektur verworfen" : ""}</small></span>
                   <span className="adminDraftBadges">{draft.duplicate && <em className={draft.duplicate.score >= .96 ? "danger" : "warn"}>{Math.round(draft.duplicate.score * 100)}% ähnlich</em>}{draft.include ? <Check size={16} /> : <X size={16} />}</span>
                 </button>
               ))}
@@ -397,10 +406,10 @@ export default function AdminPage() {
 
                 {selected.duplicate && (
                   <section className={`adminDuplicate ${selected.duplicate.score >= .96 ? "high" : ""}`}>
-                    <div><AlertTriangle size={18} /><strong>Ähnliche Aufgabe gefunden: {Math.round(selected.duplicate.score * 100)} %</strong></div>
-                    <p><b>Bester Treffer:</b> {selected.duplicate.title} · {selected.duplicate.topic} · {selected.duplicate.competence}</p>
+                    <div><AlertTriangle size={18} /><strong>{duplicateLabel(selected.duplicate.relation)} · {Math.round(selected.duplicate.score * 100)} %</strong></div>
+                    <p><b>Bester Treffer:</b> {selected.duplicate.title} · {selected.duplicate.topic} · {selected.duplicate.competence}</p>{selected.duplicate.reason && <p className="adminDuplicateReason">{selected.duplicate.reason}</p>}
                     <details><summary>Bestehende Aufgabe vergleichen</summary><div className="adminExistingQuestion"><LatexText text={selected.duplicate.questionText} /></div></details>
-                    {(selected.duplicates?.length || 0) > 1 && <details className="adminDuplicateMore"><summary>Weitere ähnliche Treffer ({Math.min((selected.duplicates?.length || 1) - 1, 4)})</summary>{selected.duplicates?.slice(1, 5).map((candidate) => <div className="adminDuplicateCandidate" key={candidate.id}><b>{Math.round(candidate.score * 100)} %</b><span>{candidate.title} · {candidate.topic} · {candidate.competence}</span></div>)}</details>}
+                    {(selected.duplicates?.length || 0) > 1 && <details className="adminDuplicateMore"><summary>Weitere ähnliche Treffer ({Math.min((selected.duplicates?.length || 1) - 1, 4)})</summary>{selected.duplicates?.slice(1, 5).map((candidate) => <div className="adminDuplicateCandidate" key={candidate.id}><b>{duplicateLabel(candidate.relation)} · {Math.round(candidate.score * 100)} %</b><span>{candidate.title} · {candidate.topic} · {candidate.competence}{candidate.reason ? ` · ${candidate.reason}` : ""}</span></div>)}</details>}
                   </section>
                 )}
 

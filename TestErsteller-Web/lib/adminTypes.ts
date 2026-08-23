@@ -8,6 +8,9 @@ export interface DuplicateCandidate {
   topic: string;
   competence: Competence;
   score: number;
+  localScore?: number;
+  relation?: "near_duplicate" | "same_skill" | "related" | "not_related";
+  reason?: string;
 }
 
 export interface ImportDraft {
@@ -29,9 +32,13 @@ export interface ImportDraft {
   include: boolean;
   analysisMode: "heuristic" | "llm";
   sourcePages?: number[];
+  sourceBlockIds?: string[];
+  segmentationMode?: "deterministic" | "llm";
+  segmentationConfidence?: number;
   mathRepair?: "none" | "visual" | "rejected";
   duplicate?: DuplicateCandidate;
   duplicates?: DuplicateCandidate[];
+  duplicatePool?: DuplicateCandidate[];
   confidence?: {
     topic: number;
     competence: number;
