@@ -1,4 +1,4 @@
-import type { ImportDraft, DuplicateCandidate } from "./adminTypes";
+import { LOCAL_RELEVANCE_THRESHOLD, type ImportDraft, type DuplicateCandidate } from "./adminTypes";
 import { loadTasks } from "./notion";
 import { LEGACY_TOPICS_BY_CLASS } from "./wpfDatabaseMap";
 
@@ -12,7 +12,7 @@ const STOPWORDS = new Set([
 // Duplicate analysis is intentionally two-stage: cheap local retrieval over the whole class,
 // then Groq only for genuinely ambiguous/suspicious candidates. This keeps the Free Tier usable
 // even when many documents are imported in one session.
-const LOCAL_GROQ_TRIGGER = 0.34;
+const LOCAL_GROQ_TRIGGER = LOCAL_RELEVANCE_THRESHOLD;
 const LOCAL_CONFIDENT_DUPLICATE = 0.95;
 const RERANK_CANDIDATE_FLOOR = 0.26;
 const MAX_RERANK_CANDIDATES = 5;
@@ -85,8 +85,14 @@ function proseTokens(text: string) {
 }
 
 function mathTokens(text: string) {
-  const value = canonical(text).replace(/\\frac/g, " frac ").replace(/\\sqrt/g, " sqrt ");
-  return Array.from(value.matchAll(/(?:[-+]?\d+(?:[.,]\d+)?)|(?:\b[a-z]\b)|(?:frac|sqrt)|(?:<=|>=|!=|=|\+|-|\*|\/|\^|<|>)/gi)).map((m) => m[0].replace(",", "."));
+  // Subtask labels such as "a)" and "b)" are document structure, not mathematical
+  // variables. Treating them as math tokens made unrelated multi-part tasks look
+  // artificially similar simply because both happened to contain a) and b).
+  const value = canonical(text)
+    .replace(/(?:^|\s)\*?[a-z]\)\s*/gim, " ")
+    .replace(/\\frac/g, " frac ")
+    .replace(/\\sqrt/g, " sqrt ");
+  return Array.from(value.matchAll(/(?:[-+]?\d+(?:[.,]\d+)?)|(?:frac|sqrt)|(?:<=|>=|!=|=|\+|-|\*|\/|\^|<|>)|(?<!\p{L})[a-z](?!\p{L})/giu)).map((m) => m[0].replace(",", "."));
 }
 
 function setJaccard(a: string[], b: string[]) {
@@ -173,11 +179,15 @@ function localComparisonNote(candidates: DuplicateCandidate[], pendingSemantic =
   if (!best) return pendingSemantic
     ? "Lokale Vorauswahl abgeschlossen; semantische Prüfung ausstehend."
     : "Vollständig lokal geprüft; keine bestehenden Vergleichsaufgaben gefunden.";
-  const score = Math.round((best.localScore ?? best.score ?? 0) * 100);
+  const raw = best.localScore ?? best.score ?? 0;
+  const score = Math.round(raw * 100);
+  if (raw < LOCAL_RELEVANCE_THRESHOLD) {
+    return `Vollständig lokal geprüft; kein relevanter ähnlicher Treffer gefunden. Höchster lokaler Rohwert: ${score} %.`;
+  }
   const target = `„${best.title}“ · ${best.topic} · ${best.competence} (${score} % lokal)`;
   return pendingSemantic
-    ? `Lokale Vorauswahl: bester Treffer ${target}. Semantische Prüfung ausstehend.`
-    : `Vollständig lokal geprüft. Bester Vergleich: ${target}.`;
+    ? `Lokale Vorauswahl: relevanter Kandidat ${target}. Semantische Prüfung ausstehend.`
+    : `Vollständig lokal geprüft. Relevanter lokaler Vergleich: ${target}.`;
 }
 
 function rerankSelection(candidates: DuplicateCandidate[]) {

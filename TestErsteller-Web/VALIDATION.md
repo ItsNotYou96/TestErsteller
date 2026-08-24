@@ -114,3 +114,15 @@ Die Dateien `pdfVisionOcr.ts`, `adminTypes.ts`, `app/api/admin/import/route.ts`,
 - Der Kandidat stammt aus `duplicatePool`/`duplicates` über `bestLocalComparison()`.
 - Der vollständige `questionText` wird mit `LatexText` gerendert und nutzt denselben Summary-Text **„Bestehende Aufgabe vergleichen“** wie der KI-geprüfte Vergleich.
 - Existiert bereits `selected.duplicate`, bleibt der bestehende Vergleich unverändert; dadurch entsteht kein doppelter Block.
+
+
+## v3.7 – Regression: Quadrat-Aufgabe vs. Aussagen zu negativen Zahlen
+
+Als Negativtest wurde folgender Vergleich verwendet:
+
+- Neu: `a) Ein Quadrat hat einen Umfang von 18 cm ... b) Die Seiten eines Quadrates wurden verdoppelt ...`
+- Bestand: `Überprüfe folgende Aussagen auf Richtigkeit ... negative Zahl ... ganze Zahl ...`
+
+Mit der lokalen Retrieval-Funktion liegt der Rohwert nach Entfernung struktureller Teilaufgabenlabels aus den Math-Tokens bei ca. **15,8 %** und damit deutlich unter `LOCAL_RELEVANCE_THRESHOLD = 0.34`. Der Kandidat wird daher **nicht mehr als lokale Ähnlichkeit dargestellt und nicht aufklappbar angeboten**. Die Oberfläche zeigt stattdessen `Lokal geprüft ✓` sowie den Statushinweis, dass kein relevanter ähnlicher Treffer gefunden wurde.
+
+Zusätzlich wurde die Einzelbuchstaben-Erkennung in `mathTokens()` auf Unicode-Letter-Grenzen umgestellt. Dadurch wird das `w` in `wächst` nicht mehr als mathematische Variable tokenisiert.

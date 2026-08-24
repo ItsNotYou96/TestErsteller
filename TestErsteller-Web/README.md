@@ -1,4 +1,4 @@
-# TestErsteller Web v3.5 – blockbasierter Importer
+# TestErsteller Web v3.7 – blockbasierter Importer
 
 Der Admin-Importer wurde in v3.0 neu aufgebaut. Er versucht nicht mehr, jedes neue Dokumentformat mit zusätzlichen Spezial-Regeln/Regexen zu reparieren.
 
@@ -98,3 +98,16 @@ Jede zurückgegebene Teilaufgabe wird separat auf ihren Zahlenbestand und – so
 ## v3.6
 - Lokale Ähnlichkeitstreffer lassen sich im Admin-Editor jetzt genauso wie KI-geprüfte Treffer über **„Bestehende Aufgabe vergleichen“** vollständig aufklappen.
 - Das gilt auch für den besten lokalen Vergleich unterhalb der eigentlichen Duplikat-Warnschwelle; zuvor war dieser nur als Kurzzeile sichtbar.
+
+
+## v3.7 – lokale Ähnlichkeit: relevante Treffer statt beliebiger „bester“ Aufgabe
+
+Die lokale Prüfung unterscheidet jetzt zwischen **„lokal geprüft“** und **„lokal ähnlich“**. Ein mathematisch unpassender Kandidat wird nicht mehr nur deshalb als Vergleich angezeigt, weil er innerhalb der Datenbank zufällig den höchsten Rohwert hatte.
+
+- Unter `34 %` lokalem Retrieval-Rohwert gilt: **kein relevanter lokaler Treffer**.
+- In diesem Fall zeigt die Adminoberfläche nur **„Lokal geprüft ✓“** und keinen aufklappbaren Fremdvergleich.
+- Erst ab der Relevanzschwelle erscheint **„Ähnlichkeit: lokal ✓“** samt vollständigem aufklappbarem Vergleich.
+- Teilaufgabenlabels wie `a)` und `b)` zählen nicht mehr als mathematische Variablen; damit erzeugen zwei völlig unterschiedliche mehrteilige Aufgaben keine künstliche mathematische Überschneidung.
+- Einzelbuchstaben werden Unicode-sicher erkannt, sodass z. B. das `w` in `wächst` nicht als Variable missverstanden wird.
+
+Die 34-%-Grenze ist eine **Retrieval-Schwelle**, keine behauptete mathematische Wahrscheinlichkeit der Ähnlichkeit. Uneindeutige relevante Kandidaten werden weiterhin durch Groq semantisch nachgeprüft.
