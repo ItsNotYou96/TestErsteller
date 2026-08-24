@@ -369,13 +369,13 @@ export default function AdminPage() {
 
   function bestLocalComparison(draft: ImportDraft) {
     const pool = draft.duplicatePool?.length ? draft.duplicatePool : (draft.duplicates || []);
-    return [...pool].sort((a, b) => (b.localScore ?? b.score ?? 0) - (a.localScore ?? a.score ?? 0))[0];
+    return [...pool].sort((a, b) => (b.retrievalScore ?? b.localScore ?? b.score ?? 0) - (a.retrievalScore ?? a.localScore ?? a.score ?? 0))[0];
   }
 
   function relevantLocalComparison(draft: ImportDraft) {
     const candidate = bestLocalComparison(draft);
     if (!candidate) return undefined;
-    return (candidate.localScore ?? candidate.score ?? 0) >= LOCAL_RELEVANCE_THRESHOLD ? candidate : undefined;
+    return candidate.retrievalEligible || candidate.relation === "near_duplicate" || (candidate.retrievalScore ?? candidate.localScore ?? candidate.score ?? 0) >= LOCAL_RELEVANCE_THRESHOLD ? candidate : undefined;
   }
 
   function duplicateStatusLabel(draft: ImportDraft) {
@@ -549,7 +549,7 @@ export default function AdminPage() {
               {drafts.map((draft, index) => (
                 <button key={draft.id} className={`adminDraftCard ${selected?.id === draft.id ? "active" : ""} ${!draft.include ? "excluded" : ""}`} onClick={() => setSelectedId(draft.id)}>
                   <span className="adminDraftIndex">{index + 1}</span>
-                  <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P.{draft.pointsSource === "heuristic" ? " (geschätzt)" : ""} · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}{draft.segmentationConfidence ? ` · Struktur ${Math.round(draft.segmentationConfidence * 100)}%` : ""}{draft.mathRepair === "visual" ? " · Mathe visuell korrigiert" : draft.mathRepair === "checking" ? " · Mathe wird geprüft" : draft.mathRepair === "needed" ? " · Mathe-Reparatur wartet" : draft.mathRepair === "rejected" || draft.mathRepair === "failed" ? " · Mathe-Korrektur fehlgeschlagen" : ""}</small>{draft.duplicateCheckStatus === "local" && relevantLocalComparison(draft) && (() => { const candidate = relevantLocalComparison(draft)!; const score = Math.round((candidate.localScore ?? candidate.score ?? 0) * 100); return <small title={`${candidate.title} · ${candidate.topic} · ${candidate.competence}`}>Bester lokaler Kandidat: {candidate.title} · {candidate.topic} · {candidate.competence} (Suchwert {score} %)</small>; })()}</span>
+                  <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P.{draft.pointsSource === "heuristic" ? " (geschätzt)" : ""} · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}{draft.segmentationConfidence ? ` · Struktur ${Math.round(draft.segmentationConfidence * 100)}%` : ""}{draft.mathRepair === "visual" ? " · Mathe visuell korrigiert" : draft.mathRepair === "checking" ? " · Mathe wird geprüft" : draft.mathRepair === "needed" ? " · Mathe-Reparatur wartet" : draft.mathRepair === "rejected" || draft.mathRepair === "failed" ? " · Mathe-Korrektur fehlgeschlagen" : ""}</small>{draft.duplicateCheckStatus === "local" && relevantLocalComparison(draft) && (() => { const candidate = relevantLocalComparison(draft)!; return <small title={`${candidate.title} · ${candidate.topic} · ${candidate.competence}`}>Bester lokaler Kandidat: {candidate.title} · {candidate.topic} · {candidate.competence}{candidate.retrievalSignals?.length ? ` · ${candidate.retrievalSignals.slice(0, 2).join(" · ")}` : ""}</small>; })()}</span>
                   <span className="adminDraftBadges">
                     <em className={`duplicateStatus ${draft.duplicateCheckStatus || "pending"}`}>{duplicateStatusLabel(draft)}</em>
                     {draft.duplicate && <em className={draft.duplicate.score >= .96 ? "danger" : "warn"}>{Math.round(draft.duplicate.score * 100)}% ähnlich</em>}
@@ -586,11 +586,11 @@ export default function AdminPage() {
 
                 {selected.duplicateCheckStatus === "local" && !selected.duplicate && relevantLocalComparison(selected) && (() => {
                   const candidate = relevantLocalComparison(selected)!;
-                  const score = Math.round((candidate.localScore ?? candidate.score ?? 0) * 100);
                   return (
                     <section className="adminDuplicate adminDuplicateLocal">
-                      <div><CheckCircle2 size={18} /><strong>Lokaler Kandidat · Suchwert {score} %</strong></div>
+                      <div><CheckCircle2 size={18} /><strong>Lokaler Kandidat</strong></div>
                       <p><b>Bestehende Aufgabe:</b> {candidate.title} · {candidate.topic} · {candidate.competence}</p>
+                      {candidate.retrievalSignals?.length ? <p className="adminDuplicateReason"><b>Warum ausgewählt:</b> {candidate.retrievalSignals.join(" · ")}</p> : null}
                       <details>
                         <summary>Bestehende Aufgabe vergleichen</summary>
                         <div className="adminExistingQuestion"><LatexText text={candidate.questionText} /></div>

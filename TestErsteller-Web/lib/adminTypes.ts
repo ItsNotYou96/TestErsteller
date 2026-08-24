@@ -1,6 +1,6 @@
 import type { Competence } from "./types";
 
-export const LOCAL_RELEVANCE_THRESHOLD = 0.50;
+export const LOCAL_RELEVANCE_THRESHOLD = 0.50; // UI fallback only; v4 retrieval uses explicit evidence flags.
 
 export interface DuplicateCandidate {
   id: string;
@@ -11,6 +11,11 @@ export interface DuplicateCandidate {
   competence: Competence;
   score: number;
   localScore?: number;
+  retrievalScore?: number;
+  structuralScore?: number;
+  retrievalEligible?: boolean;
+  retrievalSignals?: string[];
+  confidentVariant?: boolean;
   relation?: "near_duplicate" | "same_skill" | "related" | "not_related";
   reason?: string;
 }

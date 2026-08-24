@@ -124,3 +124,9 @@ Die 34-%-Grenze ist eine **Retrieval-Schwelle**, keine behauptete mathematische 
 - Bereits ab einem Suchwert von 16 % kann eine Aufgabe semantisch per Groq geprüft werden; dadurch werden anders formulierte Varianten nicht mehr bei 20–30 % abgeschnitten.
 - Groq ist bei diesen Kandidaten die endgültige semantische Bewertung. Der lokale Suchwert wird nicht mehr in den KI-Prozentwert hineingemischt.
 - Nach einer Groq-Prüfung werden nur Kandidaten angezeigt, die Groq tatsächlich bewertet hat; nicht gerankte lokale Kandidaten können nicht mehr versehentlich als Ähnlichkeit erscheinen.
+
+## v4.0 – Hybrid-Ähnlichkeitssuche
+
+Die Duplikatprüfung verwendet keinen einzelnen lokalen Prozentwert mehr als harte Schranke. Kandidaten können über vier voneinander unabhängige Signale in die semantische Prüfung gelangen: Wortlaut, didaktischer Aufgabentyp, mathematische Struktur und markante Fachmerkmale. Dadurch werden z. B. Aufgaben zu „Lösungsmenge unter Beachtung der Grundmenge (G = Z/N/Q)“ auch dann gefunden, wenn Zahlen und Formulierungen variieren.
+
+Lokale Prozentwerte werden in der Adminansicht nicht mehr als Ähnlichkeitswert präsentiert. Stattdessen zeigt die Oberfläche bei einem lokalen Kandidaten die konkreten Auswahlgründe. Die eigentliche Ähnlichkeitsbewertung bleibt der semantischen Groq-Prüfung vorbehalten; nahezu identische Varianten können weiterhin lokal erkannt werden, um Tokens zu sparen.
