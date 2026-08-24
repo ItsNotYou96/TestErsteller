@@ -12,11 +12,13 @@ const STOPWORDS = new Set([
 // Duplicate analysis is intentionally two-stage: cheap local retrieval over the whole class,
 // then Groq only for genuinely ambiguous/suspicious candidates. This keeps the Free Tier usable
 // even when many documents are imported in one session.
-const LOCAL_GROQ_TRIGGER = LOCAL_RELEVANCE_THRESHOLD;
-const LOCAL_CONFIDENT_DUPLICATE = 0.95;
-const RERANK_CANDIDATE_FLOOR = 0.26;
+// The local score is only a retrieval score. It must favor recall, not pretend to be a
+// semantic similarity percentage. Groq is the semantic judge for plausible candidates.
+const LOCAL_GROQ_TRIGGER = 0.16;
+const LOCAL_CONFIDENT_DUPLICATE = 0.97;
+const RERANK_CANDIDATE_FLOOR = 0.12;
 const MAX_RERANK_CANDIDATES = 5;
-const MAX_LOCAL_POOL = 12;
+const MAX_LOCAL_POOL = 20;
 
 export type DuplicateRateLimitInfo = {
   retryAfterSeconds?: number;
@@ -121,6 +123,77 @@ function dice(a: string, b: string) {
   return 2 * common / (aa.length + bb.length);
 }
 
+
+
+type DidacticFingerprint = { concepts: string[]; actions: string[]; };
+
+const CONCEPT_PATTERNS: Array<[string, RegExp]> = [
+  ["square", /\bquadrat(?:e|en|s)?\b/i],
+  ["rectangle", /\brechteck(?:e|en|s)?\b/i],
+  ["triangle", /\bdreieck(?:e|en|s)?\b/i],
+  ["circle", /\bkreis(?:e|en|es)?\b/i],
+  ["perimeter", /\bumfang(?:s)?\b/i],
+  ["area", /\bflächeninhalt|\bflaecheninhalt|\bfläche(?:n)?\b|\bflaeche(?:n)?\b/i],
+  ["volume", /\bvolumen\b|\brauminhalt\b/i],
+  ["surface", /\boberfläche(?:n)?\b|\boberflaeche(?:n)?\b/i],
+  ["equation", /\bgleichung(?:en)?\b|[a-z]\s*=\s*[-+]?\d/iu],
+  ["term", /\bterm(?:e|en|s)?\b/i],
+  ["linear_system", /\bgleichungssystem(?:e|en|s)?\b|\blgs\b/i],
+  ["fraction", /\bbruch|\bbrüche|\bbrueche|\bzähler|\bzaehler|\bnenner|\\frac\b/i],
+  ["negative_numbers", /\bnegative[nrsm]?\s+zahl|\bminuszahl|\bvorzeichen\b/i],
+  ["rational_numbers", /\brationale[nrsm]?\s+zahl|\bgrundmenge\b.*\b[QZNR]\b/i],
+  ["percentage", /\bprozent|%|\bprozentsatz|\bgrundwert|\bprozentwert/i],
+  ["interest", /\bzins(?:en|satz)?|\bkapital\b/i],
+  ["proportionality", /\bproportional|\bantiproportional|\bzuordnung/i],
+  ["linear_function", /\blineare[nrsm]?\s+funktion|\bsteigung|\by-?achsenabschnitt/i],
+  ["quadratic_function", /\bquadratische[nrsm]?\s+funktion|\bparabel|\bscheitelpunkt/i],
+  ["exponential_function", /\bexponential(?:funktion|es|e)?|\bwachstumsfaktor/i],
+  ["coordinate_system", /\bkoordinatensystem|\bkoordinate(?:n)?|\bx-achse|\by-achse/i],
+  ["statistics", /\bmittelwert|\bmedian|\bquartil|\bboxplot|\bhäufigkeit|\bhaeufigkeit|\bspannweite/i],
+  ["probability", /\bwahrscheinlichkeit|\bzufall|\bereignis|\bbaumdiagramm/i],
+  ["diagram", /\bdiagramm|\bsäulendiagramm|\bsaeulendiagramm|\bbalkendiagramm/i],
+  ["pythagoras", /\bpythagoras|\bhypotenuse|\bkathete/i],
+  ["power", /\bpotenz|\bexponent|\bhochzahl/i],
+  ["root", /\bwurzel|√|\\sqrt/i],
+  ["unit", /\beinheit(?:en)?|\bumrechnen|\bmm\b|\bcm\b|\bdm\b|\bkm\b|\bkg\b|\bg\b/i],
+];
+
+const ACTION_PATTERNS: Array<[string, RegExp]> = [
+  ["solve_equation", /\blöse|\bloese|\blösen|\bloesen|\bnach\s+[a-z]\s+auf/i],
+  ["simplify", /\bvereinfache|\bfasse.*zusammen|\bklammern?\s+auf|\bmultipliziere\s+aus/i],
+  ["form_model", /\bstelle.*(?:term|gleichung).*auf|\bdrücke.*term.*aus|\bdruecke.*term.*aus|\bformuliere.*term|\bgib.*term/i],
+  ["calculate", /\bberechne|\brechne|\bermittle|\bbestimme/i],
+  ["justify", /\bbegründe|\bbegrunde|\bbegründen|\bbegrunden|\bweise.*nach|\bbeweis/i],
+  ["check_statement", /\büberprüfe|\bueberpruefe|\bprüfe|\bpruefe.*(?:richtig|wahr)|\baussage.*richtig/i],
+  ["compare", /\bvergleiche|\bordne|\bgrößer|\bgroesser|\bkleiner|\breihenfolge/i],
+  ["draw", /\bzeichne|\bskizziere|\bkonstruiere|\btrage.*ein/i],
+  ["interpret", /\binterpretiere|\bdeute|\bbeschreibe.*(?:diagramm|graph|verlauf)/i],
+  ["read_off", /\blies.*ab|\bentnimm.*(?:diagramm|graph|tabelle)/i],
+  ["convert", /\bwandle.*um|\brechne.*(?:einheit|cm|m|km|g|kg).*um/i],
+];
+
+function didacticFingerprint(text: string, title = ""): DidacticFingerprint {
+  const value = canonical(`${title} ${text}`);
+  const concepts = CONCEPT_PATTERNS.filter(([, rx]) => rx.test(value)).map(([name]) => name);
+  const actions = ACTION_PATTERNS.filter(([, rx]) => rx.test(value)).map(([name]) => name);
+  return { concepts, actions };
+}
+
+function fingerprintSimilarity(a: DidacticFingerprint, b: DidacticFingerprint) {
+  const concept = setJaccard(a.concepts, b.concepts);
+  const action = setJaccard(a.actions, b.actions);
+  // A shared command word alone (e.g. both say "berechne") is not enough.
+  if (concept <= 0) return action > 0 ? 0.10 * action : 0;
+  return Math.min(1, 0.74 * concept + 0.26 * action);
+}
+
+function retrievalSimilarity(a: string, b: string, titleA = "", titleB = "") {
+  const lexical = similarity(a, b, titleA, titleB);
+  const fp = fingerprintSimilarity(didacticFingerprint(a, titleA), didacticFingerprint(b, titleB));
+  // Strong didactic overlap can rescue differently worded variants that lexical matching alone
+  // used to rate around 20-30 %. Near copies are still found by the lexical score.
+  return Math.max(lexical, 0.82 * fp + 0.18 * lexical);
+}
 function subtaskCount(value: string) {
   return new Set(Array.from(value.matchAll(/(?:^|\n|\s)\*?([a-z])\)\s*/gim)).map((m) => m[1].toLowerCase())).size;
 }
@@ -168,8 +241,8 @@ function localCandidates(draft: ImportDraft, tasks: Awaited<ReturnType<typeof lo
     classLevel: draft.classLevel,
     topic: task.topic,
     competence: task.competence,
-    localScore: similarity(draft.questionText, task.questionText, draft.title, task.title),
-    score: similarity(draft.questionText, task.questionText, draft.title, task.title),
+    localScore: retrievalSimilarity(draft.questionText, task.questionText, draft.title, task.title),
+    score: retrievalSimilarity(draft.questionText, task.questionText, draft.title, task.title),
   } as DuplicateCandidate)).sort((a, b) => (b.localScore || 0) - (a.localScore || 0)).slice(0, MAX_LOCAL_POOL);
 }
 
@@ -182,9 +255,11 @@ function localComparisonNote(candidates: DuplicateCandidate[], pendingSemantic =
   const raw = best.localScore ?? best.score ?? 0;
   const score = Math.round(raw * 100);
   if (raw < LOCAL_RELEVANCE_THRESHOLD) {
-    return `Vollständig lokal geprüft; kein relevanter ähnlicher Treffer gefunden. Höchster lokaler Rohwert: ${score} %.`;
+    return pendingSemantic
+      ? `Lokale Kandidatensuche abgeschlossen. Bester Suchwert: ${score} %. Semantische Prüfung ausstehend.`
+      : `Vollständig lokal geprüft; kein relevanter ähnlicher Treffer gefunden. Höchster lokaler Suchwert: ${score} %.`;
   }
-  const target = `„${best.title}“ · ${best.topic} · ${best.competence} (${score} % lokal)`;
+  const target = `„${best.title}“ · ${best.topic} · ${best.competence} (Suchwert ${score} %)`;
   return pendingSemantic
     ? `Lokale Vorauswahl: relevanter Kandidat ${target}. Semantische Prüfung ausstehend.`
     : `Vollständig lokal geprüft. Relevanter lokaler Vergleich: ${target}.`;
@@ -204,8 +279,8 @@ function rerankSelection(candidates: DuplicateCandidate[]) {
     return { shouldCallGroq: false, candidates: [] as DuplicateCandidate[] };
   }
 
-  // If even the best local candidate is weak, a semantic rerank would usually spend tokens only
-  // to confirm that there is no duplicate. Keep the local result and skip Groq entirely.
+  // The local value is retrieval only. Even a 20-30 % lexical hit can be a strong semantic
+  // variant, so the gate is intentionally permissive. Only truly implausible pools skip Groq.
   if (best < LOCAL_GROQ_TRIGGER) return { shouldCallGroq: false, candidates: [] as DuplicateCandidate[] };
 
   const selected = sorted
@@ -242,9 +317,17 @@ async function rerankWithGroq(draft: ImportDraft, candidates: DuplicateCandidate
   const selection = rerankSelection(candidates);
   if (!selection.shouldCallGroq) return { candidates: candidates.sort((a, b) => b.score - a.score), usedGroq: false };
   const rerankCandidates = selection.candidates;
-  const prompt = `Vergleiche EINE neue Mathematikaufgabe mit bestehenden Aufgaben. Entscheide didaktisch, ob es praktisch dieselbe Aufgabe/Variante ist, nur dieselbe mathematische Fertigkeit prüft, lediglich thematisch verwandt ist oder nicht verwandt ist.
+  const prompt = `Vergleiche EINE neue Mathematikaufgabe mit bestehenden Aufgaben. Die lokale Stufe hat nur Kandidaten gesucht; DU bist die eigentliche semantische Ähnlichkeitsbewertung.
 
-Bewerte NICHT nach identischen Zahlen allein. Andere Zahlen bei ansonsten gleicher Handlung/Struktur können eine near_duplicate-Variante sein. Gleicher Themenbegriff ohne gleiche Aufgabenhandlung reicht nicht. Gib für jeden Kandidaten eine score zwischen 0 und 1 und eine sehr kurze Begründung. Verwende ausschließlich die gelieferten candidateId-Werte.
+Bewerte vorrangig nach diesen vier Punkten:
+1. Welcher mathematische Gegenstand wird bearbeitet?
+2. Welche Schülerhandlung wird verlangt (z. B. Term bilden, Gleichung lösen, begründen, Flächeninhalt berechnen)?
+3. Ist der notwendige Lösungsweg/die mathematische Struktur im Wesentlichen gleich?
+4. Ist die Teilaufgabenstruktur vergleichbar?
+
+Andere Zahlen, Namen oder Sachkontexte dürfen bei gleicher mathematischer Struktur trotzdem eine near_duplicate-Variante sein. Umgekehrt reicht gleicher Wortlaut wie „berechne“ oder dass beide Aufgaben a)/b) besitzen NICHT aus. Gleicher Themenbegriff bei anderer mathematischer Handlung ist höchstens related.
+
+Kalibriere score so: near_duplicate 0.85-1.00; same_skill 0.65-0.84; related 0.35-0.64; not_related 0.00-0.34. Gib für jeden Kandidaten eine sehr kurze fachliche Begründung. Verwende ausschließlich die gelieferten candidateId-Werte.
 
 NEUE AUFGABE:
 Titel: ${draft.title}
@@ -285,12 +368,31 @@ ${rerankCandidates.map((c, i) => `#${i + 1} candidateId=${c.id}\nTitel: ${c.titl
     if (!candidate) continue;
     candidate.relation = match.relation;
     candidate.reason = String(match.reason || "").slice(0, 240);
-    const modelScore = Math.max(0, Math.min(1, Number(match.score) || 0));
-    // The semantic model is the final judge, while the local score still guards against an
-    // isolated overconfident answer.
-    candidate.score = Math.max(0, Math.min(1, 0.82 * modelScore + 0.18 * (candidate.localScore || 0)));
+    const rawModelScore = Math.max(0, Math.min(1, Number(match.score) || 0));
+    // Keep score and relation internally consistent even if the model gives a borderline number.
+    const relationRange: Record<string, [number, number]> = {
+      near_duplicate: [0.85, 1],
+      same_skill: [0.65, 0.84],
+      related: [0.35, 0.64],
+      not_related: [0, 0.34],
+    };
+    const [minScore, maxScore] = relationRange[String(match.relation)] || [0, 1];
+    const modelScore = Math.max(minScore, Math.min(maxScore, rawModelScore));
+    // The semantic model is the final judge. The local value is only a retrieval score and must
+    // not drag down a genuinely similar task that happens to use different wording.
+    candidate.score = modelScore;
   }
   return { candidates: candidates.sort((a, b) => b.score - a.score), usedGroq: true };
+}
+
+function visibleCandidates(candidates: DuplicateCandidate[], usedGroq: boolean) {
+  // Once Groq has judged the shortlist, only semantically judged candidates may be shown as
+  // similarity results. Unreranked retrieval candidates are kept in duplicatePool for diagnostics
+  // but must not masquerade as semantic matches.
+  return candidates
+    .filter((candidate) => usedGroq ? !!candidate.relation && candidate.relation !== "not_related" && candidate.score >= 0.45 : candidate.score >= 0.42)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5);
 }
 
 export async function addDuplicateCandidates(drafts: ImportDraft[], options: { llmRerank?: boolean } = {}) {
@@ -314,7 +416,7 @@ export async function addDuplicateCandidates(drafts: ImportDraft[], options: { l
         ? "Lokale Vorauswahl und semantische Groq-Prüfung abgeschlossen."
         : localComparisonNote(candidates, false);
     }
-    const visible = candidates.filter((candidate) => candidate.score >= (candidate.relation ? 0.45 : 0.42)).slice(0, 5);
+    const visible = visibleCandidates(candidates, draft.duplicateCheckStatus === "groq");
     draft.duplicates = visible;
     draft.duplicate = visible[0];
     if (draft.duplicate?.relation === "near_duplicate" && draft.duplicate.score >= 0.97) draft.include = false;
@@ -335,7 +437,7 @@ export async function rerankDuplicateCandidates(draft: ImportDraft) {
     ? await rerankWithGroq(draft, existing)
     : { candidates: existing, usedGroq: false };
   const candidates = reranked.candidates;
-  const visible = candidates.filter((candidate) => candidate.score >= (candidate.relation ? 0.45 : 0.42)).slice(0, 5);
+  const visible = visibleCandidates(candidates, reranked.usedGroq);
   draft.duplicatePool = candidates.slice(0, MAX_LOCAL_POOL);
   draft.duplicates = visible;
   draft.duplicate = visible[0];

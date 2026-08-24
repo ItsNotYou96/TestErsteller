@@ -111,3 +111,10 @@ Die lokale Prüfung unterscheidet jetzt zwischen **„lokal geprüft“** und **
 - Einzelbuchstaben werden Unicode-sicher erkannt, sodass z. B. das `w` in `wächst` nicht als Variable missverstanden wird.
 
 Die 34-%-Grenze ist eine **Retrieval-Schwelle**, keine behauptete mathematische Wahrscheinlichkeit der Ähnlichkeit. Uneindeutige relevante Kandidaten werden weiterhin durch Groq semantisch nachgeprüft.
+
+## v3.8 – Ähnlichkeit: Retrieval ≠ semantische Bewertung
+- Der lokale Prozentwert ist nur noch ein **Suchwert für Kandidaten**, keine behauptete inhaltliche Ähnlichkeit.
+- Die lokale Suche kombiniert Wort-/Formelmerkmale mit einem didaktischen Fingerprint aus mathematischem Gegenstand und geforderter Schülerhandlung.
+- Bereits ab einem Suchwert von 16 % kann eine Aufgabe semantisch per Groq geprüft werden; dadurch werden anders formulierte Varianten nicht mehr bei 20–30 % abgeschnitten.
+- Groq ist bei diesen Kandidaten die endgültige semantische Bewertung. Der lokale Suchwert wird nicht mehr in den KI-Prozentwert hineingemischt.
+- Nach einer Groq-Prüfung werden nur Kandidaten angezeigt, die Groq tatsächlich bewertet hat; nicht gerankte lokale Kandidaten können nicht mehr versehentlich als Ähnlichkeit erscheinen.

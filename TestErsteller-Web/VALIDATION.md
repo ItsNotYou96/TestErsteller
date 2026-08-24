@@ -126,3 +126,15 @@ Als Negativtest wurde folgender Vergleich verwendet:
 Mit der lokalen Retrieval-Funktion liegt der Rohwert nach Entfernung struktureller Teilaufgabenlabels aus den Math-Tokens bei ca. **15,8 %** und damit deutlich unter `LOCAL_RELEVANCE_THRESHOLD = 0.34`. Der Kandidat wird daher **nicht mehr als lokale Ähnlichkeit dargestellt und nicht aufklappbar angeboten**. Die Oberfläche zeigt stattdessen `Lokal geprüft ✓` sowie den Statushinweis, dass kein relevanter ähnlicher Treffer gefunden wurde.
 
 Zusätzlich wurde die Einzelbuchstaben-Erkennung in `mathTokens()` auf Unicode-Letter-Grenzen umgestellt. Dadurch wird das `w` in `wächst` nicht mehr als mathematische Variable tokenisiert.
+
+## v3.8 Similarity regression
+- Local score is retrieval only; Groq trigger lowered from 34 % to 16 %, candidate floor from 26 % to 12 %.
+- Added didactic fingerprints (mathematical concepts + requested action) to improve recall for differently worded variants.
+- A shared command such as "berechne" without a shared mathematical concept contributes almost nothing.
+- Groq score is now the final semantic score instead of an 82/18 blend with the local retrieval score.
+- After Groq reranking, only candidates actually judged by Groq can be displayed as semantic matches.
+
+Concrete retrieval checks (same implementation, 2026-08-24):
+- Square/perimeter/area task vs. unrelated negative-number justification task: lexical 15.9 %, retrieval 15.9 % -> below 16 % Groq gate.
+- Same square/perimeter/area skill with different wording/numbers: lexical 44.5 %, retrieval 74.8 % -> semantic Groq rerank.
+- "Drücke ... mit einem Term aus" vs. "Stelle einen passenden Term auf": lexical 35.3 %, retrieval 88.3 % -> semantic Groq rerank.
