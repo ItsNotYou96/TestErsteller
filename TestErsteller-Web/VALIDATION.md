@@ -1,3 +1,36 @@
+# v4.9 Validation
+
+## Regression: Versechsfachen der Summe
+
+Testaufgabe:
+`Drücke die folgenden Aussagen mit einem Term aus a) Versechsfache die Summe aus einer Zahl und 7.`
+
+Deterministische Vorprüfung:
+- erkannter Vervielfachungsfaktor: **6**
+- `Summe` erkannt: **Addition**
+- vorhandene Konstante: **7**
+- Faktor 2 wird aus dieser Aufgabe nicht abgeleitet
+
+Erwartetes mathematisches Ergebnis: `6(x+7)`.
+
+## Validierungspipeline
+
+1. Generator erzeugt eine vollständige Musterlösung nur aus der Originalaufgabe.
+2. Unabhängiger Validator löst die Aufgabe selbst und prüft die Kandidatenlösung.
+3. Bei einem Fehler wird eine vollständige Korrektur erzeugt.
+4. Die Korrektur wird durch ein zweites Modell erneut geprüft.
+5. Nur eine bestandene Lösung wird gespeichert.
+
+## Technische Prüfung
+
+- `lib/llmAnalysis.ts` basiert auf dem vollständigen v4.8-Projektstand.
+- TypeScript `transpileModule` mit `strict: true`: **0 Fehler**.
+- Keine neuen npm-Pakete.
+- Keine neue Pflicht-Environment-Variable.
+- `GROQ_VALIDATION_MODEL` ist optional; ohne Konfiguration werden vorhandene Modelle als Validator-Fallbacks verwendet.
+
+---
+
 # v4.7 Validation
 
 ## Regression: formale Sprache → Algebra

@@ -1,3 +1,19 @@
+# v4.9 – mathematisch validierte Musterlösungen
+
+Die automatische Erzeugung des Erwartungshorizonts wurde gegen fachlich falsche Musterlösungen abgesichert. Bisher konnte eine formal vollständige Lösung bereits als `complete` gelten, obwohl einzelne Faktoren, Zahlen oder Operatoren falsch waren. Beispiel: Aus „Versechsfache die Summe aus einer Zahl und 7“ konnte fälschlich `2(x+7)` entstehen.
+
+Neu in v4.9:
+- Die Musterlösung wird ausschließlich aus der **Originalaufgabe** erzeugt. Ähnliche Notion-Aufgaben und deren Lösungen sind keine mathematische Quelle.
+- Eindeutige sprachliche Operatoren werden lokal als Kontrollbedingungen erkannt, unter anderem `verdoppeln`, `verdreifachen`, `versechsfachen`, `Summe`, `Differenz`, `Produkt`, `Quotient` und `halbieren`.
+- Nach der Generierung prüft ein **separates Groq-Modell** die Lösung unabhängig auf Zahlen, Faktoren, Operatoren, Klammern, Variablen, Endergebnisse und Vollständigkeit.
+- Erkennt die Prüfung einen Fehler, muss sie eine vollständige korrigierte Musterlösung liefern. Diese Korrektur wird anschließend noch einmal mit einem anderen Modell gegengeprüft.
+- Erst eine mathematisch validierte Lösung wird mit `expectationStatus = complete` übernommen.
+- Bereits aus einem hochgeladenen Lösungsdokument erkannte vollständige Erwartungshorizonte werden weiterhin nicht überschrieben.
+
+Es sind keine neuen npm-Pakete erforderlich. `GROQ_VALIDATION_MODEL` kann optional gesetzt werden; ohne diese Variable nutzt die Anwendung automatisch die vorhandenen Groq-Modelle als Prüfer.
+
+---
+
 # v4.7 – Repräsentationshandlung in der Ähnlichkeitssuche
 
 Die lokale Kandidatensuche erkennt jetzt zusätzlich die abstrakte **Repräsentationshandlung** einer Aufgabe. Insbesondere werden formal-mathematische Sprachaufgaben wie „Drücke die Aussage mit einem Term aus“ und „Stelle eine zum Text passende Gleichung auf“ gemeinsam als Familie `formale sprachliche Beschreibung → Algebra` erkannt. Der Unterschied `Term` vs. `Gleichung` bleibt erhalten, verhindert aber nicht mehr, dass fachlich eng verwandte Aufgaben in den lokalen Top-Kandidaten landen.
