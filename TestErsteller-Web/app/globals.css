@@ -657,7 +657,7 @@ h2 { margin: 0; font-size: 15px; font-weight: 650; }
 .adminDraftBadges em { font-style: normal; border-radius: 3px; padding: 2px 4px; font-size: 8px; background: #fff6df; color: #845700; }
 .adminDraftBadges em.danger { background: #ffe8e8; color: #9b1c1c; }
 .adminDraftBadges em.duplicateStatus { white-space: nowrap; background: #eef2f6; color: #52606d; }
-.adminDraftBadges em.duplicateStatus.local, .adminDraftBadges em.duplicateStatus.groq { background: #eaf7ef; color: #17673b; }
+.adminDraftBadges em.duplicateStatus.local, .adminDraftBadges em.duplicateStatus.partial, .adminDraftBadges em.duplicateStatus.groq { background: #eaf7ef; color: #17673b; }
 .adminDraftBadges em.duplicateStatus.checking { background: #eef5ff; color: #245b9b; }
 .adminDraftBadges em.duplicateStatus.failed { background: #ffe8e8; color: #9b1c1c; }
 .adminEditor { min-width: 0; min-height: 0; height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 16px 18px 24px; }
@@ -669,7 +669,7 @@ h2 { margin: 0; font-size: 15px; font-weight: 650; }
 .adminDuplicateCheckStatus { margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 9px; border: 1px solid #d8dee6; border-radius: 5px; background: #f8fafc; color: #52606d; font-size: 9px; }
 .adminDuplicateCheckStatus > div { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .adminDuplicateCheckStatus > span { text-align: right; color: inherit; opacity: .88; }
-.adminDuplicateCheckStatus.local, .adminDuplicateCheckStatus.groq { border-color: #b9dfc7; background: #f0faf4; color: #17673b; }
+.adminDuplicateCheckStatus.local, .adminDuplicateCheckStatus.partial, .adminDuplicateCheckStatus.groq { border-color: #b9dfc7; background: #f0faf4; color: #17673b; }
 .adminDuplicateCheckStatus.checking { border-color: #bfd2ee; background: #f2f7ff; color: #245b9b; }
 .adminDuplicateCheckStatus.failed { border-color: #e7aaaa; background: #fff1f1; color: #8e2626; }
 .adminDuplicate { margin-bottom: 12px; padding: 10px 11px; border: 1px solid #ebcf91; background: #fff9ec; border-radius: 5px; font-size: 10px; color: #694800; }

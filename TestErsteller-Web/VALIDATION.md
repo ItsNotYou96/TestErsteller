@@ -1,4 +1,4 @@
-# v4.4 Validation
+# v4.5 Validation
 
 ## Mathematische Struktur-Normalisierung
 
@@ -35,3 +35,17 @@ Getestete Regressionen:
 
 - Keine neuen npm-Pakete oder Environment-Variablen.
 - TypeScript-Syntax/Transpilierbarkeit der ausführbaren TS/TSX-Dateien wird vor Packaging geprüft.
+
+
+## v4.5 Regression – Groq Structured Output
+
+Auslöser: Ein realer Groq-400-Fehler enthielt in `results` nach dem ersten gültigen Objekt String-Fragmente wie `"{draftId"`, sodass das komplette Batch zuvor verworfen wurde.
+
+Geprüfte Schutzmaßnahmen:
+- Batch-Schema verwendet nur Integer-Indizes und keine UUID-Rückgabe.
+- Batch-Ausgabe enthält keinen frei generierten Ähnlichkeits-Score mehr.
+- Strict-Schema-400 (`json_validate_failed`/`output_parse_failed`) führt zu genau einem JSON-Object-Fallback.
+- Nicht-Objekte in `results` und `matches` werden ignoriert statt den gesamten Batch zu zerstören.
+- Fehlende Kandidatenbewertungen erzeugen Status `partial`; lokale Kandidaten bleiben sichtbar.
+- 429 bleibt ein echter Rate-Limit-Fehler und wird weiterhin von der bestehenden Client-Queue behandelt.
+- TypeScript-Transpile-Test über 29 TS/TSX-Dateien: 0 Syntaxdiagnosen.

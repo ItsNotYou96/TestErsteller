@@ -28,6 +28,7 @@ export interface DuplicateCandidate {
   relation?: "near_duplicate" | "same_skill" | "related" | "not_related";
   reason?: string;
   rubric?: SimilarityRubric;
+  semanticReviewed?: boolean;
 }
 
 export interface ImportDraft {
@@ -58,7 +59,7 @@ export interface ImportDraft {
   duplicates?: DuplicateCandidate[];
   duplicatePool?: DuplicateCandidate[];
   duplicateNeedsRerank?: boolean;
-  duplicateCheckStatus?: "pending" | "checking" | "local" | "groq" | "failed";
+  duplicateCheckStatus?: "pending" | "checking" | "local" | "partial" | "groq" | "failed";
   duplicateCheckNote?: string;
   confidence?: {
     topic: number;

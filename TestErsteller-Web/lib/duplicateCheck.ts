@@ -565,23 +565,22 @@ const BATCH_RERANK_SCHEMA = {
         type: "object",
         additionalProperties: false,
         properties: {
-          draftId: { type: "string" },
+          taskIndex: { type: "integer" },
           matches: {
             type: "array",
             items: {
               type: "object",
               additionalProperties: false,
               properties: {
-                candidateId: { type: "string" },
+                candidateIndex: { type: "integer" },
                 relation: { type: "string", enum: ["near_duplicate", "same_skill", "related", "not_related"] },
-                score: { type: "number" },
                 reason: { type: "string" },
               },
-              required: ["candidateId", "relation", "score", "reason"],
+              required: ["candidateIndex", "relation", "reason"],
             },
           },
         },
-        required: ["draftId", "matches"],
+        required: ["taskIndex", "matches"],
       },
     },
   },
@@ -589,18 +588,141 @@ const BATCH_RERANK_SCHEMA = {
 } as const;
 
 function groqVisibleCandidates(candidates: DuplicateCandidate[]) {
-  // After semantic checking, never surface an unjudged local runner-up as an "Ähnlichkeit".
-  // This was one source of confusing matches in later versions.
   return candidates
-    .filter((candidate) => candidate.relation === "near_duplicate" || candidate.relation === "same_skill")
+    .filter((candidate) => candidate.semanticReviewed && (candidate.relation === "near_duplicate" || candidate.relation === "same_skill"))
     .sort((a, b) => b.score - a.score)
     .slice(0, 5);
 }
 
+function relationScore(relation: DuplicateCandidate["relation"], retrievalScore = 0) {
+  // Groq no longer invents a percentage. The relation is categorical and the numeric value is
+  // only an internal sort key. A little local evidence breaks ties within the same category.
+  const base = relation === "near_duplicate" ? 0.92
+    : relation === "same_skill" ? 0.72
+      : relation === "related" ? 0.36
+        : 0.05;
+  return Math.min(0.99, base + Math.min(0.06, Math.max(0, retrievalScore) * 0.06));
+}
+
+function isGroqStructuredOutputFailure(status: number, body: string) {
+  return status === 400 && /(?:json_validate_failed|output_parse_failed|does not match the expected schema|parsing failed)/i.test(body);
+}
+
+type PreparedBatchItem = {
+  draft: ImportDraft;
+  existing: DuplicateCandidate[];
+  selection: ReturnType<typeof rerankSelection>;
+  selected: DuplicateCandidate[];
+};
+
+type BatchGroqResult = {
+  parsed: any | null;
+  usedFallback: boolean;
+  formattingFailure?: string;
+};
+
+async function requestDuplicateBatch(
+  active: PreparedBatchItem[],
+  apiKey: string,
+  responseMode: "strict" | "json_object",
+): Promise<{ ok: true; data: any } | { ok: false; status: number; body: string; rateLimit: DuplicateRateLimitInfo }> {
+  const instructions = `Vergleiche mehrere neue Mathematikaufgaben jeweils mit ihren bestehenden Kandidaten.\n\n` +
+    `Klassifiziere jeden Kandidaten unabhängig als:\n` +
+    `- near_duplicate: praktisch dieselbe Aufgabe/Variante; Zahlen oder Kontextdetails dürfen verändert sein, aber Schülerhandlung, mathematischer Lösungsweg und Struktur sind nahezu gleich.\n` +
+    `- same_skill: gleicher konkreter Aufgabentyp und dieselbe mathematische Fertigkeit; als Übungsvarianten sinnvoll austauschbar.\n` +
+    `- related: nur thematisch/fachlich verwandt, aber anderer Aufgabentyp oder andere Schülerhandlung.\n` +
+    `- not_related: keine relevante Ähnlichkeit.\n\n` +
+    `Gleiche Oberbegriffe reichen NICHT. Eine Erklär-/Begründungsaufgabe ist nicht ähnlich zu einer Sach-/Anwendungsaufgabe nur wegen desselben Themas. Eine Sachmodellierung ist nicht automatisch ähnlich zu einer rein algebraischen Aufgabe, nur weil beide am Ende einen Term oder eine Gleichung verwenden. Es ist ausdrücklich erlaubt, alle Kandidaten als not_related zu markieren. Erzwinge keinen Treffer.\n` +
+    `Gib JEDE gelieferte Kandidatenposition genau einmal zurück. reason maximal 18 Wörter. Verwende nur taskIndex und candidateIndex aus der Eingabe.`;
+
+  const tasksText = active.map(({ draft, selected }, taskIndex) => `TASK taskIndex=${taskIndex}\nNEUE AUFGABE:\nTitel: ${draft.title}\n${draft.questionText.slice(0, 900)}\n\nKANDIDATEN:\n${selected.map((candidate, candidateIndex) => `candidateIndex=${candidateIndex}\nTitel: ${candidate.title}\nThema: ${candidate.topic}; Kompetenz: ${candidate.competence}\n${candidate.questionText.slice(0, 420)}`).join("\n\n")}`).join("\n\n---\n\n");
+
+  const jsonReminder = responseMode === "json_object"
+    ? `\n\nAntworte ausschließlich als gültiges JSON-Objekt exakt in dieser Form: {"results":[{"taskIndex":0,"matches":[{"candidateIndex":0,"relation":"same_skill","reason":"kurze Begründung"}]}]}. results darf nur Objekte enthalten, niemals Strings.`
+    : "";
+
+  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: process.env.GROQ_DUPLICATE_MODEL?.trim() || "openai/gpt-oss-20b",
+      messages: [{ role: "user", content: `${instructions}\n\n${tasksText}${jsonReminder}` }],
+      reasoning_effort: "low",
+      reasoning_format: "hidden",
+      response_format: responseMode === "strict"
+        ? { type: "json_schema", json_schema: { name: "duplicate_batch_v45", strict: true, schema: BATCH_RERANK_SCHEMA } }
+        : { type: "json_object" },
+      max_completion_tokens: 700,
+    }),
+    cache: "no-store",
+  });
+
+  if (!response.ok) return { ok: false, status: response.status, body: await response.text(), rateLimit: duplicateRateLimitInfo(response) };
+  return { ok: true, data: await response.json() };
+}
+
+function parseGroqMessage(data: any) {
+  const raw = data?.choices?.[0]?.message?.content;
+  if (typeof raw !== "string") return null;
+  try { return JSON.parse(raw); }
+  catch { return null; }
+}
+
+async function runBatchGroq(active: PreparedBatchItem[], apiKey: string): Promise<BatchGroqResult> {
+  const strict = await requestDuplicateBatch(active, apiKey, "strict");
+  if (strict.ok) {
+    const parsed = parseGroqMessage(strict.data);
+    if (parsed) return { parsed, usedFallback: false };
+    // A syntactically broken strict response should be treated like the documented schema failure.
+  } else {
+    if (strict.status === 429) {
+      throw new DuplicateRerankError(
+        `Groq-Ähnlichkeitsanalyse fehlgeschlagen (${strict.status}): ${strict.body}`,
+        strict.status,
+        strict.rateLimit,
+      );
+    }
+    if (!isGroqStructuredOutputFailure(strict.status, strict.body)) {
+      throw new DuplicateRerankError(
+        `Groq-Ähnlichkeitsanalyse fehlgeschlagen (${strict.status}): ${strict.body}`,
+        strict.status,
+        strict.rateLimit,
+      );
+    }
+  }
+
+  // Groq documents strict mode as schema-safe, but real 400 json_validate_failed responses can
+  // still occur. Retry exactly once in JSON Object Mode and validate/salvage the result ourselves.
+  const fallback = await requestDuplicateBatch(active, apiKey, "json_object");
+  if (!fallback.ok) {
+    if (fallback.status === 429) {
+      throw new DuplicateRerankError(
+        `Groq-Ähnlichkeitsanalyse fehlgeschlagen (${fallback.status}): ${fallback.body}`,
+        fallback.status,
+        fallback.rateLimit,
+      );
+    }
+    return {
+      parsed: null,
+      usedFallback: true,
+      formattingFailure: "Groq konnte für dieses Paket keine formal verwertbare strukturierte Antwort erzeugen; lokale Kandidaten werden verwendet.",
+    };
+  }
+  const parsed = parseGroqMessage(fallback.data);
+  return parsed
+    ? { parsed, usedFallback: true }
+    : { parsed: null, usedFallback: true, formattingFailure: "Groq lieferte auch im JSON-Fallback keine auswertbare Antwort; lokale Kandidaten werden verwendet." };
+}
+
+function safeBatchResults(parsed: any) {
+  return Array.isArray(parsed?.results) ? parsed.results.filter((result: any) => result && typeof result === "object" && !Array.isArray(result)) : [];
+}
+
 /**
- * Batch version of the restored v3.7 semantic reranker. Up to four imported tasks share one
- * Groq prompt, but each task may still send the five best v3.7-style candidates. This keeps the
- * recall that worked well before v3.8 without returning to one request per task.
+ * Robust batched semantic reranker. The model only returns compact integer indexes, never UUIDs or
+ * free-form percentages. Structured-output failures degrade to JSON Object Mode, and incomplete
+ * model output no longer destroys the whole package: successfully judged candidates are kept and
+ * unjudged candidates remain visible as local comparisons.
  */
 export async function rerankDuplicateCandidatesBatch(inputDrafts: ImportDraft[]) {
   const drafts = inputDrafts.slice(0, 4).map((draft) => ({ ...draft }));
@@ -609,8 +731,8 @@ export async function rerankDuplicateCandidatesBatch(inputDrafts: ImportDraft[])
     return drafts.map((draft) => ({ ...draft, duplicateNeedsRerank: false, duplicateCheckStatus: "local" as const }));
   }
 
-  const prepared = drafts.map((draft) => {
-    const existing = (draft.duplicatePool?.length ? draft.duplicatePool : draft.duplicates || []).map((candidate) => ({ ...candidate }));
+  const prepared: PreparedBatchItem[] = drafts.map((draft) => {
+    const existing = (draft.duplicatePool?.length ? draft.duplicatePool : draft.duplicates || []).map((candidate) => ({ ...candidate, semanticReviewed: false }));
     const selection = rerankSelection(existing);
     return { draft, existing, selection, selected: selection.candidates.slice(0, MAX_RERANK_CANDIDATES) };
   });
@@ -631,53 +753,12 @@ export async function rerankDuplicateCandidatesBatch(inputDrafts: ImportDraft[])
     });
   }
 
-  const instructions = `Vergleiche mehrere neue Mathematikaufgaben jeweils mit ihren bestehenden Kandidaten.\n\n` +
-    `Klassifiziere jeden Kandidaten unabhängig als:\n` +
-    `- near_duplicate: praktisch dieselbe Aufgabe/Variante; Zahlen oder Kontextdetails dürfen verändert sein, aber Schülerhandlung, mathematischer Lösungsweg und Struktur sind nahezu gleich.\n` +
-    `- same_skill: gleicher konkreter Aufgabentyp und dieselbe mathematische Fertigkeit; als Übungsvarianten sinnvoll austauschbar.\n` +
-    `- related: nur thematisch/fachlich verwandt, aber anderer Aufgabentyp oder andere Schülerhandlung.\n` +
-    `- not_related: keine relevante Ähnlichkeit.\n\n` +
-    `WICHTIG: Gleiche Oberbegriffe wie „Terme“, „Gleichungen“, „Flächen“ usw. reichen NICHT. Eine Erklär-/Begründungsaufgabe ist nicht ähnlich zu einer Sach-/Anwendungsaufgabe nur wegen desselben Themas. Eine Sachmodellierung ist nicht automatisch ähnlich zu einer rein algebraischen Aufgabe, nur weil beide am Ende einen Term oder eine Gleichung verwenden. Es ist ausdrücklich erlaubt, alle Kandidaten als not_related zu markieren. Erzwinge keinen Treffer. Die score ist nur intern für die Rangfolge: near_duplicate typischerweise 0.85–1, same_skill 0.65–0.84, related 0.30–0.64, not_related 0–0.29.`;
-
-  const prompt = `${instructions}\n\nVerwende ausschließlich die gelieferten draftId- und candidateId-Werte.\n\n${active.map(({ draft, selected }, taskIndex) => `TASK ${taskIndex + 1} draftId=${draft.id}\nNEUE AUFGABE:\nTitel: ${draft.title}\n${draft.questionText.slice(0, 900)}\n\nKANDIDATEN:\n${selected.map((candidate, i) => `${i + 1}. candidateId=${candidate.id}\nTitel: ${candidate.title}\nThema: ${candidate.topic}; Kompetenz: ${candidate.competence}\n${candidate.questionText.slice(0, 420)}`).join("\n\n")}`).join("\n\n---\n\n")}`;
-
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: process.env.GROQ_DUPLICATE_MODEL?.trim() || "openai/gpt-oss-20b",
-      messages: [{ role: "user", content: prompt }],
-      reasoning_effort: "low",
-      reasoning_format: "hidden",
-      response_format: { type: "json_schema", json_schema: { name: "duplicate_batch_v37", strict: true, schema: BATCH_RERANK_SCHEMA } },
-      max_completion_tokens: 700,
-    }),
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new DuplicateRerankError(
-      `Groq-Ähnlichkeitsanalyse fehlgeschlagen (${response.status}): ${body}`,
-      response.status,
-      duplicateRateLimitInfo(response),
-    );
-  }
-
-  const data = await response.json();
-  const raw = data?.choices?.[0]?.message?.content;
-  if (typeof raw !== "string") throw new DuplicateRerankError("Groq-Ähnlichkeitsanalyse hat keine JSON-Ausgabe geliefert.", 502, duplicateRateLimitInfo(response));
-  let parsed: any;
-  try { parsed = JSON.parse(raw); }
-  catch { throw new DuplicateRerankError("Groq-Ähnlichkeitsanalyse hat ungültiges JSON geliefert.", 502, duplicateRateLimitInfo(response)); }
-
-  const resultsByDraft = new Map<string, any>((parsed.results || []).map((result: any) => [String(result.draftId), result]));
-  for (const { draft, selected } of active) {
-    const result = resultsByDraft.get(draft.id);
-    if (!result) throw new DuplicateRerankError(`Groq hat für Aufgabe ${draft.id} kein Vergleichsergebnis geliefert.`, 502);
-    const returnedIds = new Set((result.matches || []).map((match: any) => String(match.candidateId)));
-    const missing = selected.filter((candidate) => !returnedIds.has(candidate.id));
-    if (missing.length) throw new DuplicateRerankError(`Groq hat nicht alle Vergleichskandidaten für Aufgabe ${draft.id} bewertet.`, 502);
+  const groq = await runBatchGroq(active, apiKey);
+  const resultItems = safeBatchResults(groq.parsed);
+  const byTaskIndex = new Map<number, any>();
+  for (const result of resultItems) {
+    const taskIndex = Number(result.taskIndex);
+    if (Number.isInteger(taskIndex) && taskIndex >= 0 && taskIndex < active.length && !byTaskIndex.has(taskIndex)) byTaskIndex.set(taskIndex, result);
   }
 
   return prepared.map(({ draft, existing, selection, selected }) => {
@@ -694,31 +775,51 @@ export async function rerankDuplicateCandidatesBatch(inputDrafts: ImportDraft[])
       };
     }
 
-    const result = resultsByDraft.get(draft.id);
-    const byId = new Map(selected.map((candidate) => [candidate.id, candidate]));
-    for (const match of result?.matches || []) {
-      const candidate = byId.get(String(match.candidateId));
-      if (!candidate) continue;
-      candidate.relation = match.relation;
-      candidate.reason = String(match.reason || "").slice(0, 260);
-      const modelScore = Math.max(0, Math.min(1, Number(match.score) || 0));
-      // Keep the successful v3.7 behavior: Groq is primary, but local evidence prevents an
-      // isolated overconfident semantic result from completely dominating the rank.
-      candidate.score = Math.max(0, Math.min(1, 0.82 * modelScore + 0.18 * (candidate.localScore || 0)));
+    const activeIndex = active.findIndex((item) => item.draft.id === draft.id);
+    const result = activeIndex >= 0 ? byTaskIndex.get(activeIndex) : undefined;
+    const reviewedIndexes = new Set<number>();
+    if (result && Array.isArray(result.matches)) {
+      for (const match of result.matches) {
+        if (!match || typeof match !== "object" || Array.isArray(match)) continue;
+        const candidateIndex = Number(match.candidateIndex);
+        if (!Number.isInteger(candidateIndex) || candidateIndex < 0 || candidateIndex >= selected.length || reviewedIndexes.has(candidateIndex)) continue;
+        const relation = String(match.relation || "") as DuplicateCandidate["relation"];
+        if (!(["near_duplicate", "same_skill", "related", "not_related"] as const).includes(relation as any)) continue;
+        const candidate = selected[candidateIndex];
+        candidate.relation = relation;
+        candidate.reason = String(match.reason || "").replace(/\s+/g, " ").trim().slice(0, 260);
+        candidate.semanticReviewed = true;
+        candidate.score = relationScore(relation, candidate.retrievalScore ?? candidate.localScore ?? 0);
+        reviewedIndexes.add(candidateIndex);
+      }
     }
+
+    const reviewedCount = reviewedIndexes.size;
+    const complete = reviewedCount === selected.length;
     const sorted = existing.sort((a, b) => b.score - a.score);
-    const visible = groqVisibleCandidates(sorted);
-    const duplicate = visible[0];
+    const confirmed = groqVisibleCandidates(sorted);
+    const duplicate = confirmed[0];
+    const localVisible = sorted.filter((candidate) => (candidate.retrievalScore ?? candidate.localScore ?? candidate.score ?? 0) >= LOCAL_DISPLAY_THRESHOLD).slice(0, 5);
+
+    let note: string;
+    if (groq.formattingFailure) note = groq.formattingFailure;
+    else if (!reviewedCount) note = "Groq lieferte für diese Aufgabe kein verwertbares Vergleichsergebnis; lokale Vergleichskandidaten bleiben sichtbar.";
+    else if (!complete) note = `Semantische KI-Prüfung teilweise abgeschlossen (${reviewedCount}/${selected.length} Kandidaten). Nicht bewertete Kandidaten bleiben als lokale Vergleiche sichtbar.`;
+    else if (groq.usedFallback) note = confirmed.length
+      ? "Semantische KI-Prüfung abgeschlossen (robuster JSON-Fallback wurde verwendet)."
+      : "Semantisch geprüft (JSON-Fallback); kein relevanter ähnlicher Kandidat bestätigt.";
+    else note = confirmed.length
+      ? "Lokale Vorauswahl und semantische Groq-Prüfung abgeschlossen."
+      : "Semantisch geprüft; unter den lokalen Kandidaten wurde keine relevante ähnliche Aufgabe bestätigt.";
+
     return {
       ...draft,
       duplicatePool: sorted.slice(0, MAX_LOCAL_POOL),
-      duplicates: visible,
+      duplicates: confirmed.length ? confirmed : localVisible,
       duplicate,
       duplicateNeedsRerank: false,
-      duplicateCheckStatus: "groq" as const,
-      duplicateCheckNote: visible.length
-        ? "Lokale Vorauswahl nach dem bewährten v3.7-Verfahren und semantische Groq-Prüfung abgeschlossen."
-        : "Semantisch geprüft; unter den lokalen Kandidaten wurde keine relevante ähnliche Aufgabe bestätigt.",
+      duplicateCheckStatus: complete ? "groq" as const : reviewedCount > 0 ? "partial" as const : "local" as const,
+      duplicateCheckNote: note,
       include: duplicate?.relation === "near_duplicate" && duplicate.score >= 0.90 ? false : draft.include,
     };
   });

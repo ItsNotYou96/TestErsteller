@@ -1,4 +1,4 @@
-# v4.4 – mathematische Struktur statt Wortlaut-Prozent
+# v4.5 – mathematische Struktur statt Wortlaut-Prozent
 
 Die lokale Ähnlichkeitssuche abstrahiert mathematische Aufgaben jetzt zusätzlich strukturell. Konkrete Zahlen/Konstanten werden für den Vergleich ersetzt, Gleichungsformen werden als Operator-/Variablenstruktur verglichen und explizite Lernziele/Schülerhandlungen werden erkannt. Dadurch können zwei Aufgaben zum Lösen linearer Gleichungen und Bestimmen der Lösungsmenge als derselbe Aufgabentyp erkannt werden, obwohl Zahlen, Terme und Formulierungen deutlich verschieden sind. Eine zusätzliche Grundmengen-Bedingung gilt dabei als Zusatzanforderung und zerstört den Kernmatch nicht.
 
@@ -176,3 +176,12 @@ Die 34-%-Grenze ist eine **Retrieval-Schwelle**, keine behauptete mathematische 
 Die Duplikatprüfung verwendet keinen einzelnen lokalen Prozentwert mehr als harte Schranke. Kandidaten können über vier voneinander unabhängige Signale in die semantische Prüfung gelangen: Wortlaut, didaktischer Aufgabentyp, mathematische Struktur und markante Fachmerkmale. Dadurch werden z. B. Aufgaben zu „Lösungsmenge unter Beachtung der Grundmenge (G = Z/N/Q)“ auch dann gefunden, wenn Zahlen und Formulierungen variieren.
 
 Lokale Prozentwerte werden in der Adminansicht nicht mehr als Ähnlichkeitswert präsentiert. Stattdessen zeigt die Oberfläche bei einem lokalen Kandidaten die konkreten Auswahlgründe. Die eigentliche Ähnlichkeitsbewertung bleibt der semantischen Groq-Prüfung vorbehalten; nahezu identische Varianten können weiterhin lokal erkannt werden, um Tokens zu sparen.
+
+
+## v4.5 – robuste Groq-Ähnlichkeitsausgabe
+
+- Batch-Reranking gibt Groq nur noch kleine `taskIndex`/`candidateIndex`-Werte statt UUIDs zurück.
+- Freie KI-Prozentwerte wurden aus dem Batch entfernt; die KI klassifiziert nur noch `near_duplicate`, `same_skill`, `related` oder `not_related`.
+- Bei Groq-Fehlern `json_validate_failed`/`output_parse_failed` wird einmal automatisch auf JSON Object Mode zurückgefallen und serverseitig validiert.
+- Fehlende Einzelbewertungen zerstören nicht mehr das gesamte Paket. Bereits verwertbare Ergebnisse bleiben erhalten; nicht bewertete Kandidaten bleiben als lokale Vergleiche sichtbar.
+- Neuer UI-Zustand `Lokal ✓ · KI teilweise` macht Teilresultate transparent, ohne den Import als fehlgeschlagen zu markieren.

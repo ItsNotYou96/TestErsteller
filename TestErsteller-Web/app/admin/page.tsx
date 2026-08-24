@@ -373,7 +373,7 @@ export default function AdminPage() {
       }
 
       const llmCount = working.filter((x) => x.analysisMode === "llm").length;
-      const duplicateChecked = working.filter((x) => x.duplicateCheckStatus === "local" || x.duplicateCheckStatus === "groq").length;
+      const duplicateChecked = working.filter((x) => x.duplicateCheckStatus === "local" || x.duplicateCheckStatus === "partial" || x.duplicateCheckStatus === "groq").length;
       const duplicateFailed = working.filter((x) => x.duplicateCheckStatus === "failed").length;
       const heuristicCount = working.length - llmCount;
       setMessage(`${working.length} Aufgaben erkannt${data.llmRequested ? ` · ${llmCount} Metadaten per Groq verfeinert${heuristicCount ? ` · ${heuristicCount} heuristisch` : ""}` : ""} · Ähnlichkeit ${duplicateChecked}/${working.length} geprüft${duplicateFailed ? ` · ${duplicateFailed} fehlgeschlagen` : ""}. Bitte Vorschläge prüfen.`);
@@ -447,6 +447,7 @@ export default function AdminPage() {
   function duplicateStatusLabel(draft: ImportDraft) {
     if (draft.duplicateCheckStatus === "groq") return "Ähnlichkeit: KI ✓";
     if (draft.duplicateCheckStatus === "local") return "Lokal geprüft ✓";
+    if (draft.duplicateCheckStatus === "partial") return "Lokal ✓ · KI teilweise";
     if (draft.duplicateCheckStatus === "checking") return "Lokal geprüft · KI prüft …";
     if (draft.duplicateCheckStatus === "failed") return "Lokal geprüft · KI-Fehler";
     return "Lokal geprüft · KI wartet";
@@ -650,9 +651,9 @@ export default function AdminPage() {
                   <span>{selected.duplicateCheckNote || "Lokaler Vergleich steht noch aus."}</span>
                 </section>
 
-                {!selected.duplicate && localComparisons(selected).length > 0 && (
+                {(!selected.duplicate || selected.duplicateCheckStatus === "partial") && localComparisons(selected).length > 0 && (
                   <section className="adminDuplicate adminDuplicateLocal">
-                    <div><FileSearch size={18} /><strong>Lokale Vergleichskandidaten</strong></div>
+                    <div><FileSearch size={18} /><strong>{selected.duplicateCheckStatus === "partial" ? "Weitere lokale Vergleichskandidaten" : "Lokale Vergleichskandidaten"}</strong></div>
                     <p className="adminDuplicateReason">Diese Treffer sind lokale Vergleichskandidaten. Die frühere Prozentanzeige wurde entfernt, weil der technische Suchwert keine fachliche Ähnlichkeits-Prozentzahl darstellt. Auch schwächere Treffer bleiben weiterhin sichtbar.</p>
                     {localComparisons(selected).map((candidate, index) => (
                       <details key={candidate.id} open={index === 0}>
