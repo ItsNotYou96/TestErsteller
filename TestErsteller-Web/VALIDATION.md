@@ -1,3 +1,15 @@
+# v4.6 Validation
+
+## Weitere ähnliche Treffer
+
+- Der beste Ähnlichkeitstreffer bleibt wie bisher über **„Bestehende Aufgabe vergleichen“** aufklappbar.
+- Unter **„Weitere ähnliche Treffer“** sind die Treffer 2–5 jetzt jeweils separat aufklappbar.
+- Jeder Aufklapper zeigt den vollständigen `questionText` über `LatexText`, also inklusive KaTeX/LaTeX-Rendering.
+- Vorhandene Groq-Begründungen und Rubrik-Kriterien werden innerhalb des jeweiligen Treffers mit angezeigt.
+- Keine Änderung an Kandidatenauswahl, Scores, Groq-Requests oder Notion-Daten.
+
+---
+
 # v4.5 Validation
 
 ## Mathematische Struktur-Normalisierung

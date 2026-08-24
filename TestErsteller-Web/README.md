@@ -1,3 +1,11 @@
+# v4.6 – weitere ähnliche Treffer vollständig aufklappbar
+
+In der Admin-Ähnlichkeitsansicht sind jetzt nicht nur der beste Treffer und die lokalen Vergleichskandidaten vollständig aufklappbar. Auch jeder Eintrag unter **„Weitere ähnliche Treffer“** besitzt einen eigenen Aufklapper. Darin werden der vollständige bestehende Aufgabentext mit KaTeX/LaTeX-Rendering, die Groq-Begründung und – sofern vorhanden – die Kriterienmatrix der semantischen Prüfung angezeigt.
+
+Die Änderung betrifft ausschließlich die Darstellung im Adminbereich; Retrieval, Groq-Queue, Notion-Abfragen und Ähnlichkeitslogik bleiben unverändert.
+
+---
+
 # v4.5 – mathematische Struktur statt Wortlaut-Prozent
 
 Die lokale Ähnlichkeitssuche abstrahiert mathematische Aufgaben jetzt zusätzlich strukturell. Konkrete Zahlen/Konstanten werden für den Vergleich ersetzt, Gleichungsformen werden als Operator-/Variablenstruktur verglichen und explizite Lernziele/Schülerhandlungen werden erkannt. Dadurch können zwei Aufgaben zum Lösen linearer Gleichungen und Bestimmen der Lösungsmenge als derselbe Aufgabentyp erkannt werden, obwohl Zahlen, Terme und Formulierungen deutlich verschieden sind. Eine zusätzliche Grundmengen-Bedingung gilt dabei als Zusatzanforderung und zerstört den Kernmatch nicht.

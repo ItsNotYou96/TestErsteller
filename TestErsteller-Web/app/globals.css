@@ -679,9 +679,13 @@ h2 { margin: 0; font-size: 15px; font-weight: 650; }
 .adminDuplicate summary { cursor: pointer; font-weight: 700; }
 .adminExistingQuestion { margin-top: 8px; padding: 8px; background: rgba(255,255,255,.7); border-radius: 4px; white-space: pre-wrap; line-height: 1.45; }
 .adminDuplicateMore { margin-top: 8px; }
-.adminDuplicateCandidate { display: flex; gap: 8px; align-items: baseline; padding: 5px 0; border-top: 1px solid rgba(120,90,20,.16); }
-.adminDuplicateCandidate b { min-width: 42px; }
-.adminDuplicateCandidate span { color: inherit; opacity: .88; }
+.adminDuplicateCandidate { display: block; padding: 0; border-top: 1px solid rgba(120,90,20,.16); }
+.adminDuplicateCandidate > summary { cursor: pointer; padding: 7px 0; line-height: 1.4; }
+.adminDuplicateCandidate > summary b { margin-right: 8px; }
+.adminDuplicateCandidate > summary span { color: inherit; opacity: .88; }
+.adminDuplicateCandidate > .adminDuplicateReason { margin: 0 0 7px; }
+.adminDuplicateCandidate > .adminSimilarityRubric { margin: 0 0 7px; }
+.adminDuplicateCandidate > .adminExistingQuestion { margin: 0 0 9px; }
 .adminEditorGrid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 9px; }
 .adminEditorGrid label { min-width: 0; }
 .adminEditorGrid .span2 { grid-column: 1 / -1; }

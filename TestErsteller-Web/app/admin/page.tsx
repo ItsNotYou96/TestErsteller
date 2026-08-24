@@ -671,7 +671,31 @@ export default function AdminPage() {
                     <p><b>Bester Treffer:</b> {selected.duplicate.title} · {selected.duplicate.topic} · {selected.duplicate.competence}</p>{selected.duplicate.reason && <p className="adminDuplicateReason">{selected.duplicate.reason}</p>}
                     {selected.duplicate.rubric && <div className="adminSimilarityRubric">{rubricLabels.map(([key, label]) => <span key={key} className={selected.duplicate!.rubric![key] ? "yes" : "no"}>{selected.duplicate!.rubric![key] ? <Check size={13} /> : <X size={13} />}{label}</span>)}</div>}
                     <details><summary>Bestehende Aufgabe vergleichen</summary><div className="adminExistingQuestion"><LatexText text={selected.duplicate.questionText} /></div></details>
-                    {(selected.duplicates?.length || 0) > 1 && <details className="adminDuplicateMore"><summary>Weitere ähnliche Treffer ({Math.min((selected.duplicates?.length || 1) - 1, 4)})</summary>{selected.duplicates?.slice(1, 5).map((candidate) => <div className="adminDuplicateCandidate" key={candidate.id}><b>{duplicateLabel(candidate.relation)}</b><span>{candidate.title} · {candidate.topic} · {candidate.competence}{candidate.reason ? ` · ${candidate.reason}` : ""}</span></div>)}</details>}
+                    {(selected.duplicates?.length || 0) > 1 && (
+                      <details className="adminDuplicateMore">
+                        <summary>Weitere ähnliche Treffer ({Math.min((selected.duplicates?.length || 1) - 1, 4)})</summary>
+                        {selected.duplicates?.slice(1, 5).map((candidate) => (
+                          <details className="adminDuplicateCandidate" key={candidate.id}>
+                            <summary>
+                              <b>{duplicateLabel(candidate.relation)}</b>
+                              <span>{candidate.title} · {candidate.topic} · {candidate.competence}</span>
+                            </summary>
+                            {candidate.reason ? <p className="adminDuplicateReason">{candidate.reason}</p> : null}
+                            {candidate.rubric ? (
+                              <div className="adminSimilarityRubric">
+                                {rubricLabels.map(([key, label]) => (
+                                  <span key={key} className={candidate.rubric![key] ? "yes" : "no"}>
+                                    {candidate.rubric![key] ? <Check size={13} /> : <X size={13} />}
+                                    {label}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
+                            <div className="adminExistingQuestion"><LatexText text={candidate.questionText} /></div>
+                          </details>
+                        ))}
+                      </details>
+                    )}
                   </section>
                 )}
 
