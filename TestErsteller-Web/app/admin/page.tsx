@@ -572,6 +572,21 @@ export default function AdminPage() {
                   <span>{selected.duplicateCheckNote || "Lokaler Vergleich steht noch aus."}</span>
                 </section>
 
+                {selected.duplicateCheckStatus === "local" && !selected.duplicate && bestLocalComparison(selected) && (() => {
+                  const candidate = bestLocalComparison(selected)!;
+                  const score = Math.round((candidate.localScore ?? candidate.score ?? 0) * 100);
+                  return (
+                    <section className="adminDuplicate adminDuplicateLocal">
+                      <div><CheckCircle2 size={18} /><strong>Bester lokaler Vergleich · {score} %</strong></div>
+                      <p><b>Bestehende Aufgabe:</b> {candidate.title} · {candidate.topic} · {candidate.competence}</p>
+                      <details>
+                        <summary>Bestehende Aufgabe vergleichen</summary>
+                        <div className="adminExistingQuestion"><LatexText text={candidate.questionText} /></div>
+                      </details>
+                    </section>
+                  );
+                })()}
+
                 {selected.duplicate && (
                   <section className={`adminDuplicate ${selected.duplicate.score >= .96 ? "high" : ""}`}>
                     <div><AlertTriangle size={18} /><strong>{duplicateLabel(selected.duplicate.relation)} · {Math.round(selected.duplicate.score * 100)} %</strong></div>

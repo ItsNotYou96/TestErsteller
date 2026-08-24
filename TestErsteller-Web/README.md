@@ -94,3 +94,7 @@ Jede zurückgegebene Teilaufgabe wird separat auf ihren Zahlenbestand und – so
 - Der normale Metadaten-Request hat dafür mehr Ausgaberaum. Falls bei einer mehrteiligen Aufgabe Teilaufgaben im erzeugten Erwartungshorizont fehlen, wird automatisch ein gezielter zweiter Request nur für die vollständige Musterlösung ausgelöst.
 - In der linken Admin-Aufgabenliste zeigt `Ähnlichkeit: lokal ✓` jetzt zusätzlich den **besten lokalen Vergleich mit Titel, Thema, Kompetenz und lokalem Prozentwert**.
 - Dieselbe Referenz steht auch im grünen Statusfeld des geöffneten Editors, selbst wenn der lokale Treffer zu schwach ist, um als eigentliche Duplikatwarnung angezeigt zu werden.
+
+## v3.6
+- Lokale Ähnlichkeitstreffer lassen sich im Admin-Editor jetzt genauso wie KI-geprüfte Treffer über **„Bestehende Aufgabe vergleichen“** vollständig aufklappen.
+- Das gilt auch für den besten lokalen Vergleich unterhalb der eigentlichen Duplikat-Warnschwelle; zuvor war dieser nur als Kurzzeile sichtbar.

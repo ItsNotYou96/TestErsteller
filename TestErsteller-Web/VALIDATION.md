@@ -108,3 +108,9 @@ Die Dateien `pdfVisionOcr.ts`, `adminTypes.ts`, `app/api/admin/import/route.ts`,
 - Eine deterministische Vollständigkeitsprüfung zählt die Teilaufgabenlabels des Aufgabentexts einschließlich doppelter Labels. Fehlt im Erwartungshorizont mindestens eine Position, wird ein separater `complete_expectation`-Structured-Output-Request mit bis zu 2400 Completion-Tokens ausgelöst.
 - Die lokale Ähnlichkeitsprüfung speichert im Statushinweis immer den besten vorhandenen lokalen Vergleich (`Titel · Thema · Kompetenz · Prozentwert`).
 - Die linke Aufgabenliste zeigt diesen Vergleich bei `Ähnlichkeit: lokal ✓` zusätzlich direkt unter den Aufgabendaten an.
+
+## v3.6 – lokaler Vergleich
+- Admin-Editor rendert für `duplicateCheckStatus === "local"` auch dann einen aufklappbaren Vergleich, wenn `draft.duplicate` wegen der Sichtbarkeitsschwelle nicht gesetzt ist.
+- Der Kandidat stammt aus `duplicatePool`/`duplicates` über `bestLocalComparison()`.
+- Der vollständige `questionText` wird mit `LatexText` gerendert und nutzt denselben Summary-Text **„Bestehende Aufgabe vergleichen“** wie der KI-geprüfte Vergleich.
+- Existiert bereits `selected.duplicate`, bleibt der bestehende Vergleich unverändert; dadurch entsteht kein doppelter Block.
