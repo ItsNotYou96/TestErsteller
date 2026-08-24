@@ -167,6 +167,19 @@ function localCandidates(draft: ImportDraft, tasks: Awaited<ReturnType<typeof lo
   } as DuplicateCandidate)).sort((a, b) => (b.localScore || 0) - (a.localScore || 0)).slice(0, MAX_LOCAL_POOL);
 }
 
+
+function localComparisonNote(candidates: DuplicateCandidate[], pendingSemantic = false) {
+  const best = [...candidates].sort((a, b) => (b.localScore || b.score || 0) - (a.localScore || a.score || 0))[0];
+  if (!best) return pendingSemantic
+    ? "Lokale Vorauswahl abgeschlossen; semantische Prüfung ausstehend."
+    : "Vollständig lokal geprüft; keine bestehenden Vergleichsaufgaben gefunden.";
+  const score = Math.round((best.localScore ?? best.score ?? 0) * 100);
+  const target = `„${best.title}“ · ${best.topic} · ${best.competence} (${score} % lokal)`;
+  return pendingSemantic
+    ? `Lokale Vorauswahl: bester Treffer ${target}. Semantische Prüfung ausstehend.`
+    : `Vollständig lokal geprüft. Bester Vergleich: ${target}.`;
+}
+
 function rerankSelection(candidates: DuplicateCandidate[]) {
   const sorted = [...candidates].sort((a, b) => (b.localScore || 0) - (a.localScore || 0));
   const best = sorted[0]?.localScore || 0;
@@ -281,11 +294,7 @@ export async function addDuplicateCandidates(drafts: ImportDraft[], options: { l
     const localSelection = rerankSelection(candidates);
     draft.duplicateNeedsRerank = localSelection.shouldCallGroq;
     draft.duplicateCheckStatus = localSelection.shouldCallGroq ? "pending" : "local";
-    draft.duplicateCheckNote = localSelection.shouldCallGroq
-      ? "Lokale Vorauswahl abgeschlossen; semantische Prüfung ausstehend."
-      : candidates.length
-        ? "Vollständig lokal geprüft; kein zusätzlicher KI-Vergleich nötig."
-        : "Vollständig lokal geprüft; keine bestehenden Vergleichsaufgaben gefunden.";
+    draft.duplicateCheckNote = localComparisonNote(candidates, localSelection.shouldCallGroq);
     if (options.llmRerank && process.env.GROQ_API_KEY?.trim()) {
       const reranked = await rerankWithGroq(draft, candidates);
       candidates = reranked.candidates;
@@ -293,7 +302,7 @@ export async function addDuplicateCandidates(drafts: ImportDraft[], options: { l
       draft.duplicateNeedsRerank = false;
       draft.duplicateCheckNote = reranked.usedGroq
         ? "Lokale Vorauswahl und semantische Groq-Prüfung abgeschlossen."
-        : "Vollständig lokal geprüft; kein zusätzlicher KI-Vergleich nötig.";
+        : localComparisonNote(candidates, false);
     }
     const visible = candidates.filter((candidate) => candidate.score >= (candidate.relation ? 0.45 : 0.42)).slice(0, 5);
     draft.duplicates = visible;
@@ -309,7 +318,7 @@ export async function rerankDuplicateCandidates(draft: ImportDraft) {
   if (!existing.length) {
     draft.duplicateNeedsRerank = false;
     draft.duplicateCheckStatus = "local";
-    draft.duplicateCheckNote = "Vollständig lokal geprüft; keine bestehenden Vergleichsaufgaben gefunden.";
+    draft.duplicateCheckNote = localComparisonNote([], false);
     return draft;
   }
   const reranked = process.env.GROQ_API_KEY?.trim()
@@ -324,7 +333,7 @@ export async function rerankDuplicateCandidates(draft: ImportDraft) {
   draft.duplicateCheckStatus = reranked.usedGroq ? "groq" : "local";
   draft.duplicateCheckNote = reranked.usedGroq
     ? "Lokale Vorauswahl und semantische Groq-Prüfung abgeschlossen."
-    : "Vollständig lokal geprüft; kein zusätzlicher KI-Vergleich nötig.";
+    : localComparisonNote(candidates, false);
   if (draft.duplicate?.relation === "near_duplicate" && draft.duplicate.score >= 0.97) draft.include = false;
   return draft;
 }

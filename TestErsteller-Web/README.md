@@ -1,4 +1,4 @@
-# TestErsteller Web v3.4 – blockbasierter Importer
+# TestErsteller Web v3.5 – blockbasierter Importer
 
 Der Admin-Importer wurde in v3.0 neu aufgebaut. Er versucht nicht mehr, jedes neue Dokumentformat mit zusätzlichen Spezial-Regeln/Regexen zu reparieren.
 
@@ -86,3 +86,11 @@ Die visuelle PDF-Mathekorrektur läuft nicht mehr versteckt innerhalb des initia
 Bei Aufgaben mit mehreren Teilaufgaben darf Qwen die Buchstaben/Labels nicht mehr neu transkribieren. Der Parser behält die Originalfolge (auch doppelte Labels) unverändert und Qwen liefert ausschließlich den Inhalt der 1., 2., 3. ... Teilaufgabe in visueller Reihenfolge. Das verhindert, dass offensichtliche Tippfehler im Quelldokument (z. B. zweimal `e)`) vom Modell "korrigiert" werden und dadurch die gesamte mathematische Reparatur verworfen wird.
 
 Jede zurückgegebene Teilaufgabe wird separat auf ihren Zahlenbestand und – soweit vorhanden – ihren normalen Wortlaut geprüft. Erst danach werden die visuell rekonstruierten Inhalte wieder hinter die unveränderten Original-Labels gesetzt.
+
+## v3.5 – vollständige Musterlösungen und transparente lokale Ähnlichkeit
+
+- Der Erwartungshorizont wird bei aktivierter KI nicht mehr als knapper Bewertungs-Hinweis angefordert, sondern als **vollständige Musterlösung**.
+- Jede vorhandene Teilaufgabe soll einzeln gelöst werden. Rechenaufgaben enthalten Rechenweg und Endergebnis, Sachaufgaben Variable/Ansatz/Rechnung/Antwortsatz und Begründungsaufgaben eine vollständige fachliche Begründung.
+- Der normale Metadaten-Request hat dafür mehr Ausgaberaum. Falls bei einer mehrteiligen Aufgabe Teilaufgaben im erzeugten Erwartungshorizont fehlen, wird automatisch ein gezielter zweiter Request nur für die vollständige Musterlösung ausgelöst.
+- In der linken Admin-Aufgabenliste zeigt `Ähnlichkeit: lokal ✓` jetzt zusätzlich den **besten lokalen Vergleich mit Titel, Thema, Kompetenz und lokalem Prozentwert**.
+- Dieselbe Referenz steht auch im grünen Statusfeld des geöffneten Editors, selbst wenn der lokale Treffer zu schwach ist, um als eigentliche Duplikatwarnung angezeigt zu werden.

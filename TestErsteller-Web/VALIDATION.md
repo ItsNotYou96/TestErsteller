@@ -1,4 +1,4 @@
-# Validierung v3.4
+# Validierung v3.5
 
 ## Regression: Aufgabengrenzen
 
@@ -100,3 +100,11 @@ Die vier visuell problematischen Positionen haben im Originalbild folgende Mathe
 Die neue Vision-Schnittstelle verlangt exakt 12 `parts` nach Ordinalzahl und gibt keine Labels zurück. Das Programm setzt die Original-Labels anschließend selbst wieder ein. Die Zahlenvalidierung erfolgt pro Position; damit sind reine Layout-Umsortierungen von Zähler/Nenner erlaubt, Zahlenänderungen zwischen Teilaufgaben dagegen nicht.
 
 Die Dateien `pdfVisionOcr.ts`, `adminTypes.ts`, `app/api/admin/import/route.ts`, `app/api/admin/repair-math/route.ts` und `app/admin/page.tsx` wurden mit TypeScript `transpileModule` syntaktisch geprüft: **0 Diagnosen**.
+
+## v3.5 – Erwartungshorizont / lokale Vergleichsreferenz
+
+- Der LLM-Prompt fordert nun ausdrücklich eine vollständige Musterlösung für jede Teilaufgabe und nicht mehr einen auf ca. 100 Wörter begrenzten Erwartungshorizont.
+- `max_completion_tokens` der Metadatenanalyse wurde auf 2200 erhöht, damit auch mehrteilige Aufgaben vollständig gelöst werden können.
+- Eine deterministische Vollständigkeitsprüfung zählt die Teilaufgabenlabels des Aufgabentexts einschließlich doppelter Labels. Fehlt im Erwartungshorizont mindestens eine Position, wird ein separater `complete_expectation`-Structured-Output-Request mit bis zu 2400 Completion-Tokens ausgelöst.
+- Die lokale Ähnlichkeitsprüfung speichert im Statushinweis immer den besten vorhandenen lokalen Vergleich (`Titel · Thema · Kompetenz · Prozentwert`).
+- Die linke Aufgabenliste zeigt diesen Vergleich bei `Ähnlichkeit: lokal ✓` zusätzlich direkt unter den Aufgabendaten an.

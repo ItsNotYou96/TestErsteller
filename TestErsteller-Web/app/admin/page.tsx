@@ -369,6 +369,11 @@ export default function AdminPage() {
     return "Ähnlichkeit: wartet";
   }
 
+  function bestLocalComparison(draft: ImportDraft) {
+    const pool = draft.duplicatePool?.length ? draft.duplicatePool : (draft.duplicates || []);
+    return [...pool].sort((a, b) => (b.localScore ?? b.score ?? 0) - (a.localScore ?? a.score ?? 0))[0];
+  }
+
   function patchDraft(id: string, patch: Partial<ImportDraft>) {
     setDrafts((prev) => prev.map((draft) => draft.id === id ? { ...draft, ...patch } : draft));
   }
@@ -511,7 +516,7 @@ export default function AdminPage() {
           <div className="adminContextFields">
             <label>Klasse als Vorgabe<select value={defaultClass} onChange={(e) => setDefaultClass(e.target.value)}><option value="">Automatisch erkennen</option>{LEGACY_CLASSES.filter((x) => Number(x) <= 10).map((x) => <option key={x}>{x}</option>)}</select></label>
             <label>Thema als Vorgabe<select value={defaultTopic} onChange={(e) => setDefaultTopic(e.target.value)}><option value="">Automatisch erkennen</option>{(LEGACY_TOPICS_BY_CLASS[defaultClass] || []).map((x) => <option key={x}>{x}</option>)}</select></label>
-            <label className="adminLlmToggle"><input type="checkbox" checked={useLlm} onChange={(e) => setUseLlm(e.target.checked)} disabled={!status.llmConfigured} /><span><b>KI-Analyse verwenden</b><small>{status.llmConfigured ? "Empfohlen für Kompetenz, AFB, Zeit und Erwartungshorizont. Dabei wird der extrahierte Aufgabentext an Groq gesendet." : "GROQ_API_KEY nicht gesetzt – heuristische Analyse bleibt verfügbar."}</small></span><Bot size={18} /></label>
+            <label className="adminLlmToggle"><input type="checkbox" checked={useLlm} onChange={(e) => setUseLlm(e.target.checked)} disabled={!status.llmConfigured} /><span><b>KI-Analyse verwenden</b><small>{status.llmConfigured ? "Empfohlen für Kompetenz, AFB, Zeit und vollständige Musterlösung im Erwartungshorizont. Dabei wird der extrahierte Aufgabentext an Groq gesendet." : "GROQ_API_KEY nicht gesetzt – heuristische Analyse bleibt verfügbar."}</small></span><Bot size={18} /></label>
             <label className="adminLlmToggle"><input type="checkbox" checked={useVisionOcr} onChange={(e) => setUseVisionOcr(e.target.checked)} disabled={!status.llmConfigured} /><span><b>Mathematik visuell korrigieren</b><small>{status.llmConfigured ? "Automatisch nur bei verdächtiger PDF-Mathematik: Die Textschicht bestimmt weiterhin die Aufgabe; Groq liest lediglich die mathematische Anordnung im Seitenbild nach (z. B. gestapelte Brüche)." : "Benötigt denselben GROQ_API_KEY."}</small></span><FileSearch size={18} /></label>
             <button className="primary adminAnalyzeButton" disabled={busy || !files.length} onClick={() => void analyze()}>{busy ? <Loader2 className="spin" size={17} /> : <FileSearch size={17} />}Aufgaben erkennen</button>
           </div>
@@ -532,7 +537,7 @@ export default function AdminPage() {
               {drafts.map((draft, index) => (
                 <button key={draft.id} className={`adminDraftCard ${selected?.id === draft.id ? "active" : ""} ${!draft.include ? "excluded" : ""}`} onClick={() => setSelectedId(draft.id)}>
                   <span className="adminDraftIndex">{index + 1}</span>
-                  <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P.{draft.pointsSource === "heuristic" ? " (geschätzt)" : ""} · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}{draft.segmentationConfidence ? ` · Struktur ${Math.round(draft.segmentationConfidence * 100)}%` : ""}{draft.mathRepair === "visual" ? " · Mathe visuell korrigiert" : draft.mathRepair === "checking" ? " · Mathe wird geprüft" : draft.mathRepair === "needed" ? " · Mathe-Reparatur wartet" : draft.mathRepair === "rejected" || draft.mathRepair === "failed" ? " · Mathe-Korrektur fehlgeschlagen" : ""}</small></span>
+                  <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P.{draft.pointsSource === "heuristic" ? " (geschätzt)" : ""} · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}{draft.segmentationConfidence ? ` · Struktur ${Math.round(draft.segmentationConfidence * 100)}%` : ""}{draft.mathRepair === "visual" ? " · Mathe visuell korrigiert" : draft.mathRepair === "checking" ? " · Mathe wird geprüft" : draft.mathRepair === "needed" ? " · Mathe-Reparatur wartet" : draft.mathRepair === "rejected" || draft.mathRepair === "failed" ? " · Mathe-Korrektur fehlgeschlagen" : ""}</small>{draft.duplicateCheckStatus === "local" && bestLocalComparison(draft) && (() => { const candidate = bestLocalComparison(draft)!; const score = Math.round((candidate.localScore ?? candidate.score ?? 0) * 100); return <small title={`${candidate.title} · ${candidate.topic} · ${candidate.competence}`}>Bester lokaler Vergleich: {candidate.title} · {candidate.topic} · {candidate.competence} ({score} %)</small>; })()}</span>
                   <span className="adminDraftBadges">
                     <em className={`duplicateStatus ${draft.duplicateCheckStatus || "pending"}`}>{duplicateStatusLabel(draft)}</em>
                     {draft.duplicate && <em className={draft.duplicate.score >= .96 ? "danger" : "warn"}>{Math.round(draft.duplicate.score * 100)}% ähnlich</em>}
@@ -600,16 +605,16 @@ export default function AdminPage() {
                   </div>
                   <div className="span2 adminLatexField">
                     <div className="adminLatexFieldHead">
-                      <span>Erwartungshorizont</span>
+                      <span>Erwartungshorizont · vollständige Musterlösung</span>
                       <button type="button" className="secondary adminLatexToggle" onClick={() => setEditExpectationSource((value) => !value)}>
                         {editExpectationSource ? <Eye size={14} /> : <Code2 size={14} />}
                         {editExpectationSource ? "Formatierte Ansicht" : "Quelltext bearbeiten"}
                       </button>
                     </div>
                     {editExpectationSource ? (
-                      <textarea rows={8} value={selected.expectation} onChange={(e) => patchDraft(selected.id, { expectation: e.target.value })} placeholder="Lösung / Bewertungserwartung" />
+                      <textarea rows={8} value={selected.expectation} onChange={(e) => patchDraft(selected.id, { expectation: e.target.value })} placeholder="Vollständige Musterlösung mit Rechenweg / Bewertungserwartung" />
                     ) : (
-                      <div className="adminLatexRendered">{selected.expectation ? <LatexText text={selected.expectation} /> : <span className="adminLatexEmpty">Noch kein Erwartungshorizont vorhanden.</span>}</div>
+                      <div className="adminLatexRendered">{selected.expectation ? <LatexText text={selected.expectation} /> : <span className="adminLatexEmpty">Noch keine vollständige Musterlösung vorhanden.</span>}</div>
                     )}
                   </div>
                 </div>
