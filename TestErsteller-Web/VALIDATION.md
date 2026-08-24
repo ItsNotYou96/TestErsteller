@@ -1,3 +1,16 @@
+# v5.0 Validation – kompakte Erwartungshorizonte
+
+Geprüfte Änderungen:
+- `expectationLooksComplete(...)` akzeptiert kurze, fachlich vollständige Lösungen ab 12 Zeichen; Teilaufgabenlabels werden weiterhin vollständig geprüft.
+- Der Generator-Prompt verlangt explizit knappe Musterlösungen ohne unnötige didaktische Erklärtexte.
+- Der Validator verlangt bei einer Korrektur ebenfalls eine vollständige, aber kompakte Ersatzlösung.
+- Die mathematische Validierung, Faktor-/Operator-Kontrolle und unabhängige Zweitprüfung aus v4.9 bleiben unverändert aktiv.
+
+Regression für die Beispielaufgabe:
+`Versechsfache die Summe aus einer Zahl und 7.` → erwartetes Ergebnis weiterhin `6(x+7)`, nun ohne erzwungenen ausführlichen Erklärungstext.
+
+---
+
 # v4.9 Validation
 
 ## Regression: Versechsfachen der Summe

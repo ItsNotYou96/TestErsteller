@@ -145,7 +145,7 @@ function subtaskLabels(text: string) {
 
 export function expectationLooksComplete(question: string, expectation: string) {
   const solution = String(expectation || "").trim();
-  if (solution.length < 45) return false;
+  if (solution.length < 12) return false;
   const expected = subtaskLabels(question);
   if (expected.length < 2) return true;
   const actual = subtaskLabels(solution);
@@ -197,19 +197,20 @@ function detectedMathConstraints(question: string) {
 function solutionPrompt(draft: ImportDraft, repair = false) {
   const labels = subtaskLabels(draft.questionText);
   const constraints = detectedMathConstraints(draft.questionText);
-  return `${repair ? "Der vorherige Lösungsversuch war unvollständig. Erstelle die Lösung vollständig neu. " : ""}Erstelle ausschließlich einen VOLLSTÄNDIGEN Erwartungshorizont mit Musterlösung für genau diese ORIGINALAUFGABE.
+  return `${repair ? "Der vorherige Lösungsversuch war unvollständig. Erstelle die Lösung vollständig neu. " : ""}Erstelle ausschließlich einen fachlich VOLLSTÄNDIGEN, aber MÖGLICHST KNAPPEN Erwartungshorizont mit Musterlösung für genau diese ORIGINALAUFGABE.
 
 WICHTIG: Verwende ausschließlich den unten stehenden Aufgabentext. Ähnliche Aufgaben, frühere Aufgaben oder deren Lösungen sind keine Quelle für Zahlen, Operatoren oder Ergebnisse.
 
 Verbindliche Regeln:
 - Lies Zahlen, Faktoren, Rechenoperationen und sprachliche Operatoren exakt. Ersetze niemals „versechsfachen“ durch „verdoppeln“ oder irgendeinen anderen Faktor.
 - Prüfe vor der Ausgabe jede Zahl, jeden Faktor, jedes Rechenzeichen und jede Klammer nochmals direkt gegen die ORIGINALAUFGABE.
-- Löse wirklich jede vorhandene Teilaufgabe vollständig und in derselben Reihenfolge.${labels.length ? ` Erwartete Teilaufgabenfolge: ${labels.map((x) => `${x})`).join(", ")}.` : ""}
+- Löse jede vorhandene Teilaufgabe vollständig und in derselben Reihenfolge, aber zeige nur die für einen Erwartungshorizont wirklich notwendigen Schritte.${labels.length ? ` Erwartete Teilaufgabenfolge: ${labels.map((x) => `${x})`).join(", ")}.` : ""}
 - Übernimm Teilaufgabenbezeichnungen sichtbar. Doppelte Bezeichnungen im Original bleiben doppelt und werden als getrennte Positionen gelöst.
-- Rechen-/Gleichungsaufgaben: nachvollziehbarer Rechenweg mit sinnvollen Umformungsschritten und eindeutigem Endergebnis.
-- Termaufgaben: sprachliche Operationen zuerst korrekt in Algebra übersetzen; danach nur dann umformen/vereinfachen, wenn es mathematisch sinnvoll ist.
-- Sachaufgaben: Variable(n) definieren, Ansatz/Gleichung aufstellen, vollständig lösen und Antwortsatz angeben.
-- Begründungs-/Argumentationsaufgaben: vollständige fachliche Begründung; bei offenen Aufgaben eine konkrete fachlich korrekte Musterlösung bzw. ein vollständiges Bewertungskriterium mit Beispiel.
+- Grundsatz: So kurz wie möglich, so ausführlich wie nötig. Keine didaktischen Erklärtexte, wenn Ansatz und Ergebnis bereits eindeutig sind.
+- Einfache Term-/Übersetzungsaufgaben: in der Regel direkt den korrekten Term bzw. das Ergebnis angeben; höchstens eine sehr kurze Erläuterung, wenn sie für das Verständnis der Operation nötig ist.
+- Rechen-/Gleichungsaufgaben: nur die entscheidenden Umformungsschritte und das Endergebnis zeigen; offensichtliche Zwischenrechnungen nicht einzeln ausschreiben.
+- Sachaufgaben: knapper Ansatz, notwendige Rechnung und Antwortsatz.
+- Begründungs-/Argumentationsaufgaben: fachlich ausreichende, aber kompakte Begründung; keine unnötigen Wiederholungen.
 - Keine bloßen Hinweise, keine Platzhalter wie „individuelle Lösung“, keine ausgelassenen Teilaufgaben.
 - Mathematische Ausdrücke als LaTeX in \\(...\\) schreiben.
 - Gib NUR die Musterlösung aus, kein JSON, keine Vorrede und den Aufgabentext nicht erneut.
@@ -260,7 +261,7 @@ Prüfe insbesondere:
 - Vollständigkeit aller Teilaufgaben.
 
 Mathematisch äquivalente Darstellungen sind erlaubt. Ein fachlicher Fehler, ein falscher Faktor oder eine ausgelassene Teilaufgabe bedeutet correct=false.
-Wenn correct=false, muss correctedSolution eine VOLLSTÄNDIGE, direkt verwendbare Musterlösung enthalten. Wenn correct=true, muss correctedSolution leer sein.
+Wenn correct=false, muss correctedSolution eine VOLLSTÄNDIGE, direkt verwendbare, aber möglichst KNAPPE Musterlösung enthalten: nur notwendige Rechen-/Begründungsschritte, keine unnötigen Erklärtexte. Wenn correct=true, muss correctedSolution leer sein.
 
 Deterministisch aus der ORIGINALAUFGABE erkannte Kontrollhinweise:
 ${constraints}

@@ -1,3 +1,22 @@
+# v5.0 – kompaktere Musterlösungen
+
+Die fachliche Validierung aus v4.9 bleibt vollständig erhalten, aber die erzeugten Erwartungshorizonte werden bewusst kürzer gehalten.
+
+Neu in v5.0:
+- Grundsatz für Musterlösungen: **so kurz wie möglich, so ausführlich wie nötig**.
+- Einfache Term-/Übersetzungsaufgaben geben in der Regel direkt den korrekten Term bzw. das Ergebnis aus.
+- Rechen- und Gleichungsaufgaben zeigen nur die entscheidenden Umformungsschritte statt jeder offensichtlichen Zwischenrechnung.
+- Sachaufgaben beschränken sich auf knappen Ansatz, notwendige Rechnung und Antwortsatz.
+- Begründungsaufgaben bleiben fachlich vollständig, sollen aber unnötige Wiederholungen vermeiden.
+- Auch automatisch korrigierte Lösungen des Validators müssen kompakt formuliert sein.
+- Die formale Mindestlänge für eine vollständige Musterlösung wurde von 45 auf 12 Zeichen gesenkt. Die mathematische Zweitprüfung aus v4.9 bleibt der eigentliche Qualitätsfilter.
+
+Beispiel:
+- Aufgabe: „Versechsfache die Summe aus einer Zahl und 7.“
+- Zielausgabe: `\(6(x+7)\)` oder eine ähnlich knappe fachlich korrekte Form, statt einer mehrsätzigen Erklärung jedes Einzelschritts.
+
+---
+
 # v4.9 – mathematisch validierte Musterlösungen
 
 Die automatische Erzeugung des Erwartungshorizonts wurde gegen fachlich falsche Musterlösungen abgesichert. Bisher konnte eine formal vollständige Lösung bereits als `complete` gelten, obwohl einzelne Faktoren, Zahlen oder Operatoren falsch waren. Beispiel: Aus „Versechsfache die Summe aus einer Zahl und 7“ konnte fälschlich `2(x+7)` entstehen.
