@@ -1,3 +1,29 @@
+# v4.1 Validation
+
+## Ähnlichkeitslogik
+
+- Nadja/Mutter-Sachaufgabe vs. „Erkläre mit eigenen Worten, wie man eine Äquivalenzumformung durchführt.“: lokaler Retrievalscore ca. 0,05, `eligible=false`; kein semantischer Groq-Vergleich nötig.
+- Zwei Varianten „Lösungsmenge unter Beachtung der Grundmenge“: Retrievalscore ca. 0,84, `eligible=true`; starke Signale für didaktischen Typ, Grundmenge/Lösungsmenge, Handlung und mathematische Struktur.
+- Zwei unterschiedlich formulierte Aufgaben „sprachliche Aussage → Term“: Retrievalscore ca. 0,83, `eligible=true`.
+- Sprachliche Termbildung vs. Johannisbeer-Sachmodellierung: Retrievalscore ca. 0,21, `eligible=false`.
+
+## Semantische Rubrik
+
+Groq liefert keinen Score und keine Relation mehr, sondern ausschließlich sechs Booleans. Die Anwendung entscheidet deterministisch:
+
+- Lernziel oder Schülerhandlung verschieden → `not_related`
+- Lernziel + Handlung gleich, mathematischer Weg verschieden → `related`
+- Lernziel + Handlung + Weg gleich, Darstellungsform verschieden → `related`
+- Lernziel + Handlung + Weg + Darstellungsform gleich → `same_skill`
+- zusätzlich vergleichbare Struktur + gleiche Vorlage → `near_duplicate`
+
+## Technische Prüfung
+
+- 29 ausführbare `.ts`/`.tsx`-Dateien per TypeScript `transpileModule`: 0 Syntaxdiagnosen.
+- `duplicateCheck.ts` zusätzlich in isolierter Laufzeit mit den obigen Regressionstexten geprüft.
+
+---
+
 # Validation v4.0
 
 ## Ziel

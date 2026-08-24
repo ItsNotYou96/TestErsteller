@@ -1,4 +1,4 @@
-import { LOCAL_RELEVANCE_THRESHOLD, type ImportDraft, type DuplicateCandidate } from "./adminTypes";
+import { LOCAL_RELEVANCE_THRESHOLD, type ImportDraft, type DuplicateCandidate, type SimilarityRubric } from "./adminTypes";
 import { loadTasks } from "./notion";
 import { LEGACY_TOPICS_BY_CLASS } from "./wpfDatabaseMap";
 
@@ -134,6 +134,7 @@ type TaskFamily =
   | "solution_set_domain"
   | "context_equation_modeling"
   | "statement_reasoning"
+  | "procedure_explanation"
   | "geometry_calculation"
   | "data_analysis"
   | "function_graph"
@@ -156,6 +157,7 @@ const CONCEPT_PATTERNS: Array<[string, RegExp]> = [
   ["volume", /\bvolumen\b|\brauminhalt\b/i],
   ["surface", /\boberfläche(?:n)?\b|\boberflaeche(?:n)?\b/i],
   ["equation", /\bgleichung(?:en)?\b|[a-z][^=\n]{0,45}=|=\s*[-+]?\d/iu],
+  ["equivalence_transform", /äquivalenzumform(?:ung|ungen)?|aequivalenzumform(?:ung|ungen)?/i],
   ["solution_set", /\blösungsmenge|\bloesungsmenge|\bL\s*=\s*\{/iu],
   ["domain_set", /\bgrundmenge|\bG\s*=\s*(?:Z|Q|R|N|IN)\b/iu],
   ["term", /\bterm(?:e|en|s)?\b/i],
@@ -187,6 +189,7 @@ const ACTION_PATTERNS: Array<[string, RegExp]> = [
   ["form_equation", /\b(?:stelle|stell|gib).*\bgleichung\b.*(?:auf|an)?|\bformuliere.*\bgleichung\b/i],
   ["calculate", /\bberechne|\brechne|\bermittle|\bbestimme/i],
   ["justify", /\bbegründe|\bbegrunde|\bbegründen|\bbegrunden|\bweise.*nach|\bbeweis/i],
+  ["explain_method", /\berkläre|\berklaere|\berläutere|\berlaeutere|\bbeschreibe[^.!?\n]{0,100}?(?:wie|vorgehen|verfahren|methode)/i],
   ["check_statement", /\büberprüfe|\bueberpruefe|\bprüfe|\bpruefe.*(?:richtig|wahr)|\baussage.*richtig/i],
   ["compare", /\bvergleiche|\bordne|\bgrößer|\bgroesser|\bkleiner|\breihenfolge/i],
   ["draw", /\bzeichne|\bskizziere|\bkonstruiere|\btrage.*ein/i],
@@ -218,6 +221,7 @@ function taskProfile(text: string, title = ""): TaskProfile {
   const solvesEquation = fp.actions.includes("solve_equation");
   const simplifies = fp.actions.includes("simplify");
   const reasons = fp.actions.includes("justify") || fp.actions.includes("check_statement");
+  const explainsMethod = fp.actions.includes("explain_method");
   const geometry = fp.concepts.some((c) => ["square", "rectangle", "triangle", "circle", "perimeter", "area", "volume", "surface", "pythagoras"].includes(c));
   const data = fp.concepts.some((c) => ["statistics", "probability", "diagram"].includes(c));
   const fn = fp.concepts.some((c) => ["linear_function", "quadratic_function", "exponential_function", "coordinate_system"].includes(c));
@@ -230,6 +234,7 @@ function taskProfile(text: string, title = ""): TaskProfile {
   else if (simplifies) { family = "term_simplification"; confidence = 0.92; }
   else if (solvesEquation && !contextual) { family = "equation_solving"; confidence = 0.94; }
   else if ((asksEquation || solvesEquation || /\bgleichung\b/.test(value)) && contextual) { family = "context_equation_modeling"; confidence = 0.90; }
+  else if (explainsMethod) { family = "procedure_explanation"; confidence = 0.93; }
   else if (reasons) { family = "statement_reasoning"; confidence = 0.90; }
   else if (geometry && fp.actions.includes("calculate")) { family = "geometry_calculation"; confidence = 0.88; }
   else if (data) { family = "data_analysis"; confidence = 0.82; }
@@ -245,7 +250,7 @@ function taskProfile(text: string, title = ""): TaskProfile {
   if (asksEquation || solvesEquation) outputs.push("equation");
   if (determinesSolutionSet) outputs.push("solution_set");
   if (fp.actions.includes("calculate")) outputs.push("number");
-  if (reasons) outputs.push("reasoning");
+  if (reasons || explainsMethod) outputs.push("reasoning");
   if (fp.actions.includes("draw")) outputs.push("drawing");
   return { ...fp, family, mode, outputs, confidence };
 }
@@ -503,6 +508,20 @@ function rerankSelection(candidates: DuplicateCandidate[]) {
   return { shouldCallGroq: selected.length > 0, candidates: selected };
 }
 
+const RUBRIC_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    sameLearningGoal: { type: "boolean" },
+    sameStudentAction: { type: "boolean" },
+    sameMathematicalMethod: { type: "boolean" },
+    sameRepresentation: { type: "boolean" },
+    comparableStructure: { type: "boolean" },
+    sameTemplate: { type: "boolean" },
+  },
+  required: ["sameLearningGoal", "sameStudentAction", "sameMathematicalMethod", "sameRepresentation", "comparableStructure", "sameTemplate"],
+} as const;
+
 const RERANK_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -514,16 +533,40 @@ const RERANK_SCHEMA = {
         additionalProperties: false,
         properties: {
           candidateId: { type: "string" },
-          relation: { type: "string", enum: ["near_duplicate", "same_skill", "related", "not_related"] },
-          score: { type: "number" },
+          rubric: RUBRIC_SCHEMA,
           reason: { type: "string" },
         },
-        required: ["candidateId", "relation", "score", "reason"],
+        required: ["candidateId", "rubric", "reason"],
       },
     },
   },
   required: ["matches"],
 } as const;
+
+function semanticVerdict(rubric: SimilarityRubric) {
+  // Core gates: if learning objective or student action differs, the tasks are not duplicates,
+  // regardless of shared topic words such as "Gleichung" or "Term".
+  if (!rubric.sameLearningGoal || !rubric.sameStudentAction) {
+    return { relation: "not_related" as const, score: 0 };
+  }
+  // Same objective/action but a different mathematical method is only thematic relation.
+  if (!rubric.sameMathematicalMethod) {
+    return { relation: "related" as const, score: 0.4 };
+  }
+  // A different representation (e.g. contextual modelling vs abstract explanation) is not the
+  // same exercise type even when some mathematical vocabulary overlaps.
+  if (!rubric.sameRepresentation) {
+    return { relation: "related" as const, score: 0.45 };
+  }
+  if (rubric.comparableStructure && rubric.sameTemplate) {
+    return { relation: "near_duplicate" as const, score: 1 };
+  }
+  return { relation: "same_skill" as const, score: 0.8 };
+}
+
+function rubricPrompt() {
+  return `Bewerte jeden Vergleich ausschließlich mit sechs Ja/Nein-Kriterien. Vergib KEINE Prozentzahl und KEINE Relation; die Anwendung berechnet das Ergebnis deterministisch.\n\nKriterien:\n1. sameLearningGoal: Prüfen beide Aufgaben dasselbe konkrete Lernziel / dieselbe Teilkompetenz? Nicht nur dasselbe Oberthema.\n2. sameStudentAction: Muss der Schüler im Kern dasselbe tun (z. B. lösen, modellieren, erklären, begründen, Term bilden)?\n3. sameMathematicalMethod: Ist der wesentliche mathematische Lösungsweg bzw. das Verfahren gleich?\n4. sameRepresentation: Ist die Darstellungsform vergleichbar (abstrakt-symbolisch, mathematisch-sprachlich, Sachsituation/Modellierung, grafisch)?\n5. comparableStructure: Ist die Aufgaben-/Teilaufgabenstruktur vergleichbar?\n6. sameTemplate: Könnte man durch Austausch von Zahlen, Namen oder kleinen Formulierungen praktisch von derselben Aufgabenvorlage sprechen?\n\nWICHTIGE GRENZEN:\n- Ein Sachproblem, das durch eine Gleichung modelliert und gelöst wird, und eine Aufgabe, die nur erklärt, wie eine Äquivalenzumformung funktioniert, haben NICHT dasselbe Lernziel und NICHT dieselbe Schülerhandlung.\n- Mathematische Aussagen in einen Term übersetzen und eine Sachsituation durch einen Term modellieren haben NICHT dieselbe Repräsentation und normalerweise NICHT dasselbe konkrete Lernziel.\n- Vorgegebene Gleichungen lösen und aus einer Sachsituation erst eine Gleichung aufstellen sind unterschiedliche Schülerhandlungen.\n- Gemeinsame Wörter wie "Term", "Gleichung" oder dasselbe Kapitel reichen für KEIN Kriterium allein aus.\n- Sei streng: Bei Unsicherheit antworte false.\n\nDie Begründung soll kurz benennen, welche Kernkriterien übereinstimmen oder nicht.`;
+}
 
 async function rerankWithGroq(draft: ImportDraft, candidates: DuplicateCandidate[]) {
   const apiKey = process.env.GROQ_API_KEY?.trim();
@@ -531,32 +574,7 @@ async function rerankWithGroq(draft: ImportDraft, candidates: DuplicateCandidate
   const selection = rerankSelection(candidates);
   if (!selection.shouldCallGroq) return { candidates: candidates.sort((a, b) => b.score - a.score), usedGroq: false };
   const rerankCandidates = selection.candidates;
-  const prompt = `Vergleiche EINE neue Mathematikaufgabe mit bestehenden Aufgaben. Die lokale Stufe hat nur Kandidaten gesucht; DU bist die eigentliche semantische Ähnlichkeitsbewertung.
-
-Bewerte streng auf DUPLIKATÄHNLICHKEIT, nicht bloß auf dasselbe Thema.
-
-Prüfe in dieser Reihenfolge:
-1. Gleicher Aufgabentyp / gleiche didaktische Funktion?
-2. Gleiche geforderte Schülerhandlung?
-3. Gleiche Repräsentation: rein symbolisch/sprachlich, Sachsituation/Modellierung oder grafisch?
-4. Im Wesentlichen derselbe Lösungsweg bzw. dieselbe mathematische Struktur?
-5. Vergleichbare Teilaufgabenstruktur?
-
-HARTE REGELN:
-- „Einen Term aus einer mathematisch formulierten Aussage bilden“ ist NICHT derselbe Aufgabentyp wie „eine Sachsituation durch einen Term modellieren“. Auch wenn beide einen Term als Ergebnis haben: höchstens related, normalerweise not_related.
-- „Eine vorgegebene Gleichung lösen“ ist NICHT derselbe Aufgabentyp wie „aus einer Sachsituation erst eine Gleichung aufstellen und lösen“.
-- Gemeinsame Wörter wie Term, Gleichung, berechne oder gleiche a)/b)-Struktur reichen niemals für same_skill.
-- near_duplicate nur, wenn Aufgaben durch Austausch von Zahlen/Namen/kleinen Kontextdetails praktisch als Varianten derselben Vorlage gelten könnten.
-- same_skill nur, wenn ein Lehrer beide Aufgaben als austauschbare Übungsvarianten für genau dieselbe Teilkompetenz einsetzen könnte.
-
-Kalibriere score streng: near_duplicate 0.88-1.00; same_skill 0.72-0.87; related 0.40-0.69; not_related 0.00-0.39. Gib für jeden Kandidaten eine kurze fachliche Begründung. Verwende ausschließlich die gelieferten candidateId-Werte.
-
-NEUE AUFGABE:
-Titel: ${draft.title}
-${draft.questionText.slice(0, 1800)}
-
-KANDIDATEN:
-${rerankCandidates.map((c, i) => `#${i + 1} candidateId=${c.id}\nTitel: ${c.title}\nThema: ${c.topic}; Kompetenz: ${c.competence}\nLokale Signale: ${(c.retrievalSignals || []).join("; ") || "keine"}\n${c.questionText.slice(0, 650)}`).join("\n\n")}`;
+  const prompt = `Vergleiche EINE neue Mathematikaufgabe mit bestehenden Aufgaben. Die lokale Stufe dient ausschließlich der Kandidatensuche.\n\n${rubricPrompt()}\n\nVerwende ausschließlich die gelieferten candidateId-Werte.\n\nNEUE AUFGABE:\nTitel: ${draft.title}\n${draft.questionText.slice(0, 1800)}\n\nKANDIDATEN:\n${rerankCandidates.map((c, i) => `#${i + 1} candidateId=${c.id}\nTitel: ${c.title}\nThema: ${c.topic}; Kompetenz: ${c.competence}\nLokale Signale: ${(c.retrievalSignals || []).join("; ") || "keine"}\n${c.questionText.slice(0, 650)}`).join("\n\n")}`;
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -565,8 +583,8 @@ ${rerankCandidates.map((c, i) => `#${i + 1} candidateId=${c.id}\nTitel: ${c.titl
       messages: [{ role: "user", content: prompt }],
       reasoning_effort: "low",
       reasoning_format: "hidden",
-      response_format: { type: "json_schema", json_schema: { name: "duplicate_rerank", strict: true, schema: RERANK_SCHEMA } },
-      max_completion_tokens: 380,
+      response_format: { type: "json_schema", json_schema: { name: "duplicate_rubric", strict: true, schema: RERANK_SCHEMA } },
+      max_completion_tokens: 320,
     }),
     cache: "no-store",
   });
@@ -588,21 +606,12 @@ ${rerankCandidates.map((c, i) => `#${i + 1} candidateId=${c.id}\nTitel: ${c.titl
   for (const match of parsed.matches || []) {
     const candidate = byId.get(String(match.candidateId));
     if (!candidate) continue;
-    candidate.relation = match.relation;
-    candidate.reason = String(match.reason || "").slice(0, 240);
-    const rawModelScore = Math.max(0, Math.min(1, Number(match.score) || 0));
-    // Keep score and relation internally consistent even if the model gives a borderline number.
-    const relationRange: Record<string, [number, number]> = {
-      near_duplicate: [0.88, 1],
-      same_skill: [0.72, 0.87],
-      related: [0.40, 0.69],
-      not_related: [0, 0.39],
-    };
-    const [minScore, maxScore] = relationRange[String(match.relation)] || [0, 1];
-    const modelScore = Math.max(minScore, Math.min(maxScore, rawModelScore));
-    // The semantic model is the final judge. The local value is only a retrieval score and must
-    // not drag down a genuinely similar task that happens to use different wording.
-    candidate.score = modelScore;
+    const rubric = match.rubric as SimilarityRubric;
+    const verdict = semanticVerdict(rubric);
+    candidate.rubric = rubric;
+    candidate.relation = verdict.relation;
+    candidate.score = verdict.score;
+    candidate.reason = String(match.reason || "").slice(0, 260);
   }
   return { candidates: candidates.sort((a, b) => b.score - a.score), usedGroq: true };
 }
@@ -612,7 +621,7 @@ function visibleCandidates(candidates: DuplicateCandidate[], usedGroq: boolean) 
   // similarity results. Unreranked retrieval candidates are kept in duplicatePool for diagnostics
   // but must not masquerade as semantic matches.
   return candidates
-    .filter((candidate) => usedGroq ? (candidate.relation === "near_duplicate" || candidate.relation === "same_skill") && candidate.score >= 0.72 : candidate.score >= 0.52)
+    .filter((candidate) => usedGroq ? (candidate.relation === "near_duplicate" || candidate.relation === "same_skill") : candidate.score >= 0.52)
     .sort((a, b) => b.score - a.score)
     .slice(0, 5);
 }
@@ -641,7 +650,7 @@ export async function addDuplicateCandidates(drafts: ImportDraft[], options: { l
     const visible = visibleCandidates(candidates, draft.duplicateCheckStatus === "groq");
     draft.duplicates = visible;
     draft.duplicate = visible[0];
-    if (draft.duplicate?.relation === "near_duplicate" && draft.duplicate.score >= 0.97) draft.include = false;
+    if (draft.duplicate?.relation === "near_duplicate") draft.include = false;
     else if (!draft.duplicate?.relation && (draft.duplicate?.score || 0) >= 0.98) draft.include = false;
   }
   return drafts;
@@ -668,7 +677,7 @@ export async function rerankDuplicateCandidates(draft: ImportDraft) {
   draft.duplicateCheckNote = reranked.usedGroq
     ? "Lokale Vorauswahl und semantische Groq-Prüfung abgeschlossen."
     : localComparisonNote(candidates, false);
-  if (draft.duplicate?.relation === "near_duplicate" && draft.duplicate.score >= 0.97) draft.include = false;
+  if (draft.duplicate?.relation === "near_duplicate") draft.include = false;
   return draft;
 }
 
@@ -690,11 +699,10 @@ const BATCH_RERANK_SCHEMA = {
               additionalProperties: false,
               properties: {
                 candidateId: { type: "string" },
-                relation: { type: "string", enum: ["near_duplicate", "same_skill", "related", "not_related"] },
-                score: { type: "number" },
+                rubric: RUBRIC_SCHEMA,
                 reason: { type: "string" },
               },
-              required: ["candidateId", "relation", "score", "reason"],
+              required: ["candidateId", "rubric", "reason"],
             },
           },
         },
@@ -704,18 +712,6 @@ const BATCH_RERANK_SCHEMA = {
   },
   required: ["results"],
 } as const;
-
-function clampSemanticScore(relation: string, rawScore: unknown) {
-  const relationRange: Record<string, [number, number]> = {
-    near_duplicate: [0.88, 1],
-    same_skill: [0.72, 0.87],
-    related: [0.40, 0.69],
-    not_related: [0, 0.39],
-  };
-  const [minScore, maxScore] = relationRange[relation] || [0, 1];
-  const raw = Math.max(0, Math.min(1, Number(rawScore) || 0));
-  return Math.max(minScore, Math.min(maxScore, raw));
-}
 
 /**
  * Reranks up to four ambiguous tasks in one Groq request. The repeated semantic instructions are
@@ -749,27 +745,7 @@ export async function rerankDuplicateCandidatesBatch(inputDrafts: ImportDraft[])
     });
   }
 
-  const prompt = `Prüfe mehrere Mathematikaufgaben auf DUPLIKATÄHNLICHKEIT. Die lokale Stufe hat bereits unpassende Datenbankaufgaben verworfen. Bewerte NICHT bloß Themenverwandtschaft.
-
-Für jeden neuen Task gelten streng diese Kriterien:
-1. gleicher Aufgabentyp / gleiche didaktische Funktion,
-2. gleiche geforderte Schülerhandlung,
-3. gleiche Repräsentation (symbolisch/sprachlich vs. Sachsituation/Modellierung vs. grafisch),
-4. im Wesentlichen derselbe Lösungsweg bzw. dieselbe mathematische Struktur,
-5. vergleichbare Teilaufgabenstruktur.
-
-Harte Regeln:
-- Mathematische Aussagen in einen Term übersetzen != Sachsituation durch einen Term modellieren.
-- Vorgegebene Gleichung lösen != aus einer Sachsituation eine Gleichung aufstellen und lösen.
-- Gemeinsame Wörter wie Term, Gleichung, berechne oder gleiche a)/b)-Struktur reichen nie für same_skill.
-- near_duplicate: praktisch dieselbe Vorlage mit anderen Zahlen/Namen/kleinen Kontextdetails.
-- same_skill: als Übungsvarianten für genau dieselbe Teilkompetenz austauschbar.
-- related: nur fachlich verwandt; dies ist KEIN Ähnlichkeitstreffer.
-
-Scores: near_duplicate 0.88-1.00; same_skill 0.72-0.87; related 0.40-0.69; not_related 0.00-0.39.
-Verwende ausschließlich die gelieferten draftId- und candidateId-Werte.
-
-${active.map(({ draft, selected }, taskIndex) => `TASK ${taskIndex + 1} draftId=${draft.id}\nNEU: ${draft.title}\n${draft.questionText.slice(0, 700)}\nKANDIDATEN:\n${selected.map((candidate, i) => `${i + 1}. candidateId=${candidate.id}\n${candidate.title} · ${candidate.topic} · ${candidate.competence}\nLokale Signale: ${(candidate.retrievalSignals || []).join("; ") || "keine"}\n${candidate.questionText.slice(0, 350)}`).join("\n")}`).join("\n\n---\n\n")}`;
+  const prompt = `Prüfe mehrere Mathematikaufgaben paarweise. Die lokale Stufe dient ausschließlich der Kandidatensuche.\n\n${rubricPrompt()}\n\nVerwende ausschließlich die gelieferten draftId- und candidateId-Werte.\n\n${active.map(({ draft, selected }, taskIndex) => `TASK ${taskIndex + 1} draftId=${draft.id}\nNEU: ${draft.title}\n${draft.questionText.slice(0, 700)}\nKANDIDATEN:\n${selected.map((candidate, i) => `${i + 1}. candidateId=${candidate.id}\n${candidate.title} · ${candidate.topic} · ${candidate.competence}\nLokale Signale: ${(candidate.retrievalSignals || []).join("; ") || "keine"}\n${candidate.questionText.slice(0, 350)}`).join("\n")}`).join("\n\n---\n\n")}`;
 
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -779,8 +755,8 @@ ${active.map(({ draft, selected }, taskIndex) => `TASK ${taskIndex + 1} draftId=
       messages: [{ role: "user", content: prompt }],
       reasoning_effort: "low",
       reasoning_format: "hidden",
-      response_format: { type: "json_schema", json_schema: { name: "duplicate_batch_rerank", strict: true, schema: BATCH_RERANK_SCHEMA } },
-      max_completion_tokens: 520,
+      response_format: { type: "json_schema", json_schema: { name: "duplicate_batch_rubric", strict: true, schema: BATCH_RERANK_SCHEMA } },
+      max_completion_tokens: 460,
     }),
     cache: "no-store",
   });
@@ -827,9 +803,12 @@ ${active.map(({ draft, selected }, taskIndex) => `TASK ${taskIndex + 1} draftId=
     for (const match of result?.matches || []) {
       const candidate = byId.get(String(match.candidateId));
       if (!candidate) continue;
-      candidate.relation = match.relation;
-      candidate.reason = String(match.reason || "").slice(0, 240);
-      candidate.score = clampSemanticScore(String(match.relation), match.score);
+      const rubric = match.rubric as SimilarityRubric;
+      const verdict = semanticVerdict(rubric);
+      candidate.rubric = rubric;
+      candidate.relation = verdict.relation;
+      candidate.score = verdict.score;
+      candidate.reason = String(match.reason || "").slice(0, 260);
     }
     const sorted = existing.sort((a, b) => b.score - a.score);
     const visible = visibleCandidates(sorted, true);
@@ -842,7 +821,7 @@ ${active.map(({ draft, selected }, taskIndex) => `TASK ${taskIndex + 1} draftId=
       duplicateNeedsRerank: false,
       duplicateCheckStatus: "groq" as const,
       duplicateCheckNote: "Lokale Vorauswahl und semantische Groq-Prüfung abgeschlossen.",
-      include: duplicate?.relation === "near_duplicate" && duplicate.score >= 0.97 ? false : draft.include,
+      include: duplicate?.relation === "near_duplicate" ? false : draft.include,
     };
   });
 }

@@ -1,3 +1,15 @@
+# v4.1 – transparente Ähnlichkeitsprüfung ohne Schein-Prozente
+
+Die semantische Ähnlichkeitsanalyse verwendet keine frei vom LLM vergebenen Prozentwerte mehr. Groq beantwortet für jeden Vergleich nur noch sechs feste Ja/Nein-Kriterien: gleiches konkretes Lernziel, gleiche Schülerhandlung, gleicher mathematischer Lösungsweg, gleiche Darstellungsform, vergleichbare Aufgabenstruktur und nahezu gleiche Vorlage. Die Anwendung leitet daraus deterministisch `near_duplicate`, `same_skill`, `related` oder `not_related` ab.
+
+Harte Gates: Unterscheiden sich konkretes Lernziel oder Schülerhandlung, kann ein Kandidat niemals als ähnlicher Aufgabentyp erscheinen. Unterscheidet sich die Darstellungsform (z. B. Sachmodellierung vs. abstrakte Verfahrens-Erklärung), wird ebenfalls kein `same_skill` vergeben. Prozentanzeigen wurden aus der Adminansicht entfernt; stattdessen zeigt der beste Treffer die sechs Kriterien mit ✓/✗.
+
+Die lokale Vorauswahl wurde außerdem um den allgemeinen Aufgabentyp `procedure_explanation` erweitert. Aufgaben wie „Erkläre, wie ein Verfahren funktioniert“ werden damit von Anwendungs-/Modellierungsaufgaben getrennt, bevor Groq überhaupt Tokens verbraucht.
+
+Regressionen: Eine Alters-Sachaufgabe (Nadja/Mutter) gegen „Erkläre eine Äquivalenzumformung“ ist lokal nicht einmal ein relevanter Kandidat; Grundmengen-/Lösungsmengen-Varianten und unterschiedlich formulierte Aufgaben zur sprachlichen Termbildung bleiben dagegen sichere Kandidaten.
+
+---
+
 # v3.9 – präzisere und sparsamere Ähnlichkeitsanalyse
 
 Die lokale Stufe ist wieder ein strenger Retrieval-Filter statt eines möglichst breiten Netzes. Sie klassifiziert Aufgaben nach didaktischer Familie und Repräsentationsmodus (z. B. sprachliche Termübersetzung, Sachsituations-Modellierung, Termvereinfachung, Gleichungslösen). Oberflächlich ähnliche, didaktisch aber verschiedene Aufgaben werden vor Groq ausgesiebt. Insbesondere gilt: „mathematische Aussage in einen Term übersetzen“ und „Sachsituation durch einen Term modellieren“ sind verschiedene Aufgabentypen.

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, Code2, Eye, FileSearch, Loader2, LogOut, Shield, Trash2, Upload, X } from "lucide-react";
 import { LatexText } from "@/components/LatexText";
-import { LOCAL_RELEVANCE_THRESHOLD, type AdminStatus, type ImportDraft } from "@/lib/adminTypes";
+import { LOCAL_RELEVANCE_THRESHOLD, type AdminStatus, type ImportDraft, type SimilarityRubric } from "@/lib/adminTypes";
 import type { Competence } from "@/lib/types";
 import { LEGACY_CLASSES, LEGACY_TOPICS_BY_CLASS } from "@/lib/wpfDatabaseMap";
 import { parsePointsSpec } from "@/lib/taskParsing";
@@ -359,6 +359,16 @@ export default function AdminPage() {
   }
 
 
+
+  const rubricLabels: Array<[keyof SimilarityRubric, string]> = [
+    ["sameLearningGoal", "Gleiches konkretes Lernziel"],
+    ["sameStudentAction", "Gleiche Schülerhandlung"],
+    ["sameMathematicalMethod", "Gleicher mathematischer Lösungsweg"],
+    ["sameRepresentation", "Gleiche Darstellungsform"],
+    ["comparableStructure", "Vergleichbare Aufgabenstruktur"],
+    ["sameTemplate", "Nahezu gleiche Aufgabenvorlage"],
+  ];
+
   function duplicateLabel(relation?: string) {
     if (relation === "near_duplicate") return "Sehr ähnliche Variante";
     if (relation === "same_skill") return "Gleicher Aufgabentyp";
@@ -552,7 +562,7 @@ export default function AdminPage() {
                   <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P.{draft.pointsSource === "heuristic" ? " (geschätzt)" : ""} · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}{draft.segmentationConfidence ? ` · Struktur ${Math.round(draft.segmentationConfidence * 100)}%` : ""}{draft.mathRepair === "visual" ? " · Mathe visuell korrigiert" : draft.mathRepair === "checking" ? " · Mathe wird geprüft" : draft.mathRepair === "needed" ? " · Mathe-Reparatur wartet" : draft.mathRepair === "rejected" || draft.mathRepair === "failed" ? " · Mathe-Korrektur fehlgeschlagen" : ""}</small>{draft.duplicateCheckStatus === "local" && relevantLocalComparison(draft) && (() => { const candidate = relevantLocalComparison(draft)!; return <small title={`${candidate.title} · ${candidate.topic} · ${candidate.competence}`}>Bester lokaler Kandidat: {candidate.title} · {candidate.topic} · {candidate.competence}{candidate.retrievalSignals?.length ? ` · ${candidate.retrievalSignals.slice(0, 2).join(" · ")}` : ""}</small>; })()}</span>
                   <span className="adminDraftBadges">
                     <em className={`duplicateStatus ${draft.duplicateCheckStatus || "pending"}`}>{duplicateStatusLabel(draft)}</em>
-                    {draft.duplicate && <em className={draft.duplicate.score >= .96 ? "danger" : "warn"}>{Math.round(draft.duplicate.score * 100)}% ähnlich</em>}
+                    {draft.duplicate && <em className={draft.duplicate.relation === "near_duplicate" ? "danger" : "warn"}>{duplicateLabel(draft.duplicate.relation)}</em>}
                     {draft.include ? <Check size={16} /> : <X size={16} />}
                   </span>
                 </button>
@@ -600,11 +610,12 @@ export default function AdminPage() {
                 })()}
 
                 {selected.duplicate && (
-                  <section className={`adminDuplicate ${selected.duplicate.score >= .96 ? "high" : ""}`}>
-                    <div><AlertTriangle size={18} /><strong>{duplicateLabel(selected.duplicate.relation)} · {Math.round(selected.duplicate.score * 100)} %</strong></div>
+                  <section className={`adminDuplicate ${selected.duplicate.relation === "near_duplicate" ? "high" : ""}`}>
+                    <div><AlertTriangle size={18} /><strong>{duplicateLabel(selected.duplicate.relation)}</strong></div>
                     <p><b>Bester Treffer:</b> {selected.duplicate.title} · {selected.duplicate.topic} · {selected.duplicate.competence}</p>{selected.duplicate.reason && <p className="adminDuplicateReason">{selected.duplicate.reason}</p>}
+                    {selected.duplicate.rubric && <div className="adminSimilarityRubric">{rubricLabels.map(([key, label]) => <span key={key} className={selected.duplicate!.rubric![key] ? "yes" : "no"}>{selected.duplicate!.rubric![key] ? <Check size={13} /> : <X size={13} />}{label}</span>)}</div>}
                     <details><summary>Bestehende Aufgabe vergleichen</summary><div className="adminExistingQuestion"><LatexText text={selected.duplicate.questionText} /></div></details>
-                    {(selected.duplicates?.length || 0) > 1 && <details className="adminDuplicateMore"><summary>Weitere ähnliche Treffer ({Math.min((selected.duplicates?.length || 1) - 1, 4)})</summary>{selected.duplicates?.slice(1, 5).map((candidate) => <div className="adminDuplicateCandidate" key={candidate.id}><b>{duplicateLabel(candidate.relation)} · {Math.round(candidate.score * 100)} %</b><span>{candidate.title} · {candidate.topic} · {candidate.competence}{candidate.reason ? ` · ${candidate.reason}` : ""}</span></div>)}</details>}
+                    {(selected.duplicates?.length || 0) > 1 && <details className="adminDuplicateMore"><summary>Weitere ähnliche Treffer ({Math.min((selected.duplicates?.length || 1) - 1, 4)})</summary>{selected.duplicates?.slice(1, 5).map((candidate) => <div className="adminDuplicateCandidate" key={candidate.id}><b>{duplicateLabel(candidate.relation)}</b><span>{candidate.title} · {candidate.topic} · {candidate.competence}{candidate.reason ? ` · ${candidate.reason}` : ""}</span></div>)}</details>}
                   </section>
                 )}
 

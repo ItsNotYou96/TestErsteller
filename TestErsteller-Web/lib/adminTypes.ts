@@ -2,6 +2,15 @@ import type { Competence } from "./types";
 
 export const LOCAL_RELEVANCE_THRESHOLD = 0.50; // UI fallback only; v4 retrieval uses explicit evidence flags.
 
+export interface SimilarityRubric {
+  sameLearningGoal: boolean;
+  sameStudentAction: boolean;
+  sameMathematicalMethod: boolean;
+  sameRepresentation: boolean;
+  comparableStructure: boolean;
+  sameTemplate: boolean;
+}
+
 export interface DuplicateCandidate {
   id: string;
   title: string;
@@ -18,6 +27,7 @@ export interface DuplicateCandidate {
   confidentVariant?: boolean;
   relation?: "near_duplicate" | "same_skill" | "related" | "not_related";
   reason?: string;
+  rubric?: SimilarityRubric;
 }
 
 export interface ImportDraft {

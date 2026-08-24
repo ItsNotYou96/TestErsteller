@@ -733,3 +733,9 @@ h2 { margin: 0; font-size: 15px; font-weight: 650; }
 .adminMathRepairStatus.visual { border-color: #b9dfc7; background: #f0faf4; color: #17673b; }
 .adminMathRepairStatus.checking { border-color: #bfd2ee; background: #f2f7ff; color: #245b9b; }
 .adminMathRepairStatus.rejected, .adminMathRepairStatus.failed { border-color: #e7aaaa; background: #fff1f1; color: #8e2626; }
+
+/* v4.1: transparent duplicate rubric instead of pseudo-precise percentages */
+.adminSimilarityRubric { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 6px 10px; margin: 10px 0 12px; }
+.adminSimilarityRubric span { display: inline-flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px; font-size: .86rem; }
+.adminSimilarityRubric span.yes { background: #eaf7ef; color: #17673b; }
+.adminSimilarityRubric span.no { background: #f6f7f8; color: #667085; }
