@@ -1,3 +1,31 @@
+# v4.2 Validation
+
+## Ziel
+Regression auf den v3.7-Kern der lokalen Kandidatensuche, kombiniert mit den späteren Queue-/Batch-Verbesserungen. Keine didaktischen Profil-Boosts aus v3.8–v4.1.
+
+## Lokale Regressionen
+Mit der wiederhergestellten v3.7-Formel ergeben die bekannten Gegenbeispiele ungefähr:
+
+- sprachliche Termbildung vs. Johannisbeer-Sachmodellierung: ~10 % → unter Groq-Grenze
+- Nadja/Mutter-Altersaufgabe vs. „Äquivalenzumformung erklären“: ~15 % → unter Groq-Grenze
+- Grundmenge/Lösungsmenge vs. echte Variante mit anderen Zahlen: ~38 % → wird Groq vorgelegt
+- anders formulierte sprachliche Termbildungsvariante: ~79 % → sicherer Kandidat
+- Alters-Sachaufgabe vs. gleichartige Alters-Sachaufgabe mit anderen Personen/Zahlen: ~27 % → wird Groq vorgelegt
+
+Damit wird der frühere 24-%-False-Negative-Fall nicht mehr an der alten 34-%-Grenze abgeschnitten, ohne die sehr breite 16-%-Suche aus v3.8 zurückzubringen.
+
+## Groq
+- bis zu 4 neue Aufgaben pro Batch
+- bis zu 5 Kandidaten pro Aufgabe
+- Kandidaten stammen ausschließlich aus dem wiederhergestellten v3.7-Retrieval
+- `related`/`not_related` werden nicht als sichtbare Ähnlichkeit ausgegeben
+- es ist ausdrücklich erlaubt, keinen Treffer zu bestätigen
+
+## Syntax
+`lib/duplicateCheck.ts`, `app/admin/page.tsx` und `app/api/admin/check-duplicates-batch/route.ts` wurden mit TypeScript `transpileModule` geprüft: keine Syntaxdiagnosen.
+
+---
+
 # v4.1 Validation
 
 ## Ähnlichkeitslogik

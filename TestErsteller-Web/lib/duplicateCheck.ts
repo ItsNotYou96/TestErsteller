@@ -1,4 +1,4 @@
-import { LOCAL_RELEVANCE_THRESHOLD, type ImportDraft, type DuplicateCandidate, type SimilarityRubric } from "./adminTypes";
+import type { ImportDraft, DuplicateCandidate } from "./adminTypes";
 import { loadTasks } from "./notion";
 import { LEGACY_TOPICS_BY_CLASS } from "./wpfDatabaseMap";
 
@@ -12,13 +12,15 @@ const STOPWORDS = new Set([
 // Duplicate analysis is intentionally two-stage: cheap local retrieval over the whole class,
 // then Groq only for genuinely ambiguous/suspicious candidates. This keeps the Free Tier usable
 // even when many documents are imported in one session.
-// The local score is only a retrieval score. It must favor recall, not pretend to be a
-// semantic similarity percentage. Groq is the semantic judge for plausible candidates.
-const LOCAL_GROQ_TRIGGER = 0.34;
-const LOCAL_CONFIDENT_DUPLICATE = 0.98;
-const RERANK_CANDIDATE_FLOOR = 0.20;
-const MAX_RERANK_CANDIDATES = 2;
-const MAX_LOCAL_POOL = 16;
+// v4.2 deliberately restores the v3.7 retrieval engine. The later didactic-profile
+// boosts (v3.8-v4.1) caused generic thematic matches to displace genuinely similar tasks.
+// Local similarity is ONLY a retrieval signal; Groq gets borderline candidates and may reject all.
+const LOCAL_GROQ_TRIGGER = 0.22;
+const LOCAL_CONFIDENT_DUPLICATE = 0.96;
+const RERANK_CANDIDATE_FLOOR = 0.18;
+const MAX_RERANK_CANDIDATES = 5;
+const MAX_LOCAL_POOL = 12;
+const LOCAL_DISPLAY_THRESHOLD = 0.50;
 
 export type DuplicateRateLimitInfo = {
   retryAfterSeconds?: number;
@@ -123,289 +125,6 @@ function dice(a: string, b: string) {
   return 2 * common / (aa.length + bb.length);
 }
 
-
-
-type DidacticFingerprint = { concepts: string[]; actions: string[]; };
-type TaskFamily =
-  | "verbal_term_translation"
-  | "context_term_modeling"
-  | "term_simplification"
-  | "equation_solving"
-  | "solution_set_domain"
-  | "context_equation_modeling"
-  | "statement_reasoning"
-  | "procedure_explanation"
-  | "geometry_calculation"
-  | "data_analysis"
-  | "function_graph"
-  | "generic";
-type RepresentationMode = "abstract" | "verbal_math" | "contextual" | "graphical";
-type TaskProfile = DidacticFingerprint & {
-  family: TaskFamily;
-  mode: RepresentationMode;
-  outputs: string[];
-  confidence: number;
-};
-
-const CONCEPT_PATTERNS: Array<[string, RegExp]> = [
-  ["square", /\bquadrat(?:e|en|s)?\b/i],
-  ["rectangle", /\brechteck(?:e|en|s)?\b/i],
-  ["triangle", /\bdreieck(?:e|en|s)?\b/i],
-  ["circle", /\bkreis(?:e|en|es)?\b/i],
-  ["perimeter", /\bumfang(?:s)?\b/i],
-  ["area", /\bflächeninhalt|\bflaecheninhalt|\bfläche(?:n)?\b|\bflaeche(?:n)?\b/i],
-  ["volume", /\bvolumen\b|\brauminhalt\b/i],
-  ["surface", /\boberfläche(?:n)?\b|\boberflaeche(?:n)?\b/i],
-  ["equation", /\bgleichung(?:en)?\b|[a-z][^=\n]{0,45}=|=\s*[-+]?\d/iu],
-  ["equivalence_transform", /äquivalenzumform(?:ung|ungen)?|aequivalenzumform(?:ung|ungen)?/i],
-  ["solution_set", /\blösungsmenge|\bloesungsmenge|\bL\s*=\s*\{/iu],
-  ["domain_set", /\bgrundmenge|\bG\s*=\s*(?:Z|Q|R|N|IN)\b/iu],
-  ["term", /\bterm(?:e|en|s)?\b/i],
-  ["linear_system", /\bgleichungssystem(?:e|en|s)?\b|\blgs\b/i],
-  ["fraction", /\bbruch|\bbrüche|\bbrueche|\bzähler|\bzaehler|\bnenner|\\frac\b/i],
-  ["negative_numbers", /\bnegative[nrsm]?\s+zahl|\bminuszahl|\bvorzeichen\b/i],
-  ["rational_numbers", /\brationale[nrsm]?\s+zahl|\bgrundmenge\b.*\b[QZNR]\b/i],
-  ["percentage", /\bprozent|%|\bprozentsatz|\bgrundwert|\bprozentwert/i],
-  ["interest", /\bzins(?:en|satz)?|\bkapital\b/i],
-  ["proportionality", /\bproportional|\bantiproportional|\bzuordnung/i],
-  ["linear_function", /\blineare[nrsm]?\s+funktion|\bsteigung|\by-?achsenabschnitt/i],
-  ["quadratic_function", /\bquadratische[nrsm]?\s+funktion|\bparabel|\bscheitelpunkt/i],
-  ["exponential_function", /\bexponential(?:funktion|es|e)?|\bwachstumsfaktor/i],
-  ["coordinate_system", /\bkoordinatensystem|\bkoordinate(?:n)?|\bx-achse|\by-achse/i],
-  ["statistics", /\bmittelwert|\bmedian|\bquartil|\bboxplot|\bhäufigkeit|\bhaeufigkeit|\bspannweite/i],
-  ["probability", /\bwahrscheinlichkeit|\bzufall|\bereignis|\bbaumdiagramm/i],
-  ["diagram", /\bdiagramm|\bsäulendiagramm|\bsaeulendiagramm|\bbalkendiagramm/i],
-  ["pythagoras", /\bpythagoras|\bhypotenuse|\bkathete/i],
-  ["power", /\bpotenz|\bexponent|\bhochzahl/i],
-  ["root", /\bwurzel|√|\\sqrt/i],
-  ["unit", /\beinheit(?:en)?|\bumrechnen|\bmm\b|\bcm\b|\bdm\b|\bkm\b|\bkg\b|\bg\b/i],
-];
-
-const ACTION_PATTERNS: Array<[string, RegExp]> = [
-  ["determine_solution_set", /\b(?:gib|bestimme|ermittle)[^.!?\n]{0,80}?(?:lösungsmenge|loesungsmenge)|(?:lösungsmenge|loesungsmenge)[^.!?\n]{0,80}?(?:gib|bestimme|ermittle)|\bgrundmenge\b/i],
-  ["solve_equation", /\blöse|\bloese|\blösen|\bloesen|\bnach\s+[a-z]\s+auf|\blösungsmenge|\bloesungsmenge/i],
-  ["simplify", /\bvereinfache|\bfasse.*zusammen|\bklammern?\s+auf|\bmultipliziere\s+aus/i],
-  ["form_term", /\b(?:stelle|stell|gib).*\bterm\b.*(?:auf|an)?|\bdrücke.*\bterm\b.*aus|\bdruecke.*\bterm\b.*aus|\bformuliere.*\bterm\b/i],
-  ["form_equation", /\b(?:stelle|stell|gib).*\bgleichung\b.*(?:auf|an)?|\bformuliere.*\bgleichung\b/i],
-  ["calculate", /\bberechne|\brechne|\bermittle|\bbestimme/i],
-  ["justify", /\bbegründe|\bbegrunde|\bbegründen|\bbegrunden|\bweise.*nach|\bbeweis/i],
-  ["explain_method", /\berkläre|\berklaere|\berläutere|\berlaeutere|\bbeschreibe[^.!?\n]{0,100}?(?:wie|vorgehen|verfahren|methode)/i],
-  ["check_statement", /\büberprüfe|\bueberpruefe|\bprüfe|\bpruefe.*(?:richtig|wahr)|\baussage.*richtig/i],
-  ["compare", /\bvergleiche|\bordne|\bgrößer|\bgroesser|\bkleiner|\breihenfolge/i],
-  ["draw", /\bzeichne|\bskizziere|\bkonstruiere|\btrage.*ein/i],
-  ["interpret", /\binterpretiere|\bdeute|\bbeschreibe.*(?:diagramm|graph|verlauf)/i],
-  ["read_off", /\blies.*ab|\bentnimm.*(?:diagramm|graph|tabelle)/i],
-  ["convert", /\bwandle.*um|\brechne.*(?:einheit|cm|m|km|g|kg).*um/i],
-];
-
-const VERBAL_MATH_RX = /\b(summe|differenz|produkt|quotient)\s+aus\b|\b(?:doppelte|dreifache|vierfache|fünffache|fuenffache|sechsfache|versechsfache|vielfache)\b|\b(?:addiere|subtrahiere|multipliziere|dividiere)\b/i;
-const CONTEXT_RX = /(?:€|\beuro\b|\bcent\b|\bkg\b|\bgramm\b|\bg\b|\bcm\b|\bm²\b|\bm2\b|\bkm\b|\bliter\b|\bjahre?\b|\bmonate?\b|\bstunden?\b|\bminuten?\b|\bpreis\b|\bkosten\b|\bkostet\b|\bgewicht\b|\bverkauf\w*\b|\bkauf\w*\b|\btaschengeld\b|\banzahl\b|\bstück\b|\bstueck\b|\bschalen?\b|\bpackung\b|\btore?\b|\balter\b|\bstrecke\b|\bgeschwindigkeit\b|\bfläche(?:n)?\b|\bflaeche(?:n)?\b|\bumfang\b)/i;
-const GRAPHICAL_RX = /\bdiagramm|\bgraph|\bkoordinatensystem|\btabelle|\bzeichnung|\bskizze/i;
-
-function didacticFingerprint(text: string, title = ""): DidacticFingerprint {
-  const value = canonical(`${title} ${text}`);
-  const concepts = CONCEPT_PATTERNS.filter(([, rx]) => rx.test(value)).map(([name]) => name);
-  const actions = ACTION_PATTERNS.filter(([, rx]) => rx.test(value)).map(([name]) => name);
-  return { concepts, actions };
-}
-
-function taskProfile(text: string, title = ""): TaskProfile {
-  const value = canonical(`${title} ${text}`);
-  const fp = didacticFingerprint(text, title);
-  const contextual = CONTEXT_RX.test(value);
-  const verbalMath = VERBAL_MATH_RX.test(value);
-  const graphical = GRAPHICAL_RX.test(value);
-  const asksTerm = fp.actions.includes("form_term");
-  const asksEquation = fp.actions.includes("form_equation");
-  const determinesSolutionSet = fp.actions.includes("determine_solution_set") || fp.concepts.includes("solution_set") || fp.concepts.includes("domain_set");
-  const solvesEquation = fp.actions.includes("solve_equation");
-  const simplifies = fp.actions.includes("simplify");
-  const reasons = fp.actions.includes("justify") || fp.actions.includes("check_statement");
-  const explainsMethod = fp.actions.includes("explain_method");
-  const geometry = fp.concepts.some((c) => ["square", "rectangle", "triangle", "circle", "perimeter", "area", "volume", "surface", "pythagoras"].includes(c));
-  const data = fp.concepts.some((c) => ["statistics", "probability", "diagram"].includes(c));
-  const fn = fp.concepts.some((c) => ["linear_function", "quadratic_function", "exponential_function", "coordinate_system"].includes(c));
-
-  let family: TaskFamily = "generic";
-  let confidence = 0.45;
-  if (determinesSolutionSet && !contextual) { family = "solution_set_domain"; confidence = 0.98; }
-  else if (asksTerm && verbalMath && !contextual) { family = "verbal_term_translation"; confidence = 0.95; }
-  else if (asksTerm && contextual) { family = "context_term_modeling"; confidence = 0.94; }
-  else if (simplifies) { family = "term_simplification"; confidence = 0.92; }
-  else if (solvesEquation && !contextual) { family = "equation_solving"; confidence = 0.94; }
-  else if ((asksEquation || solvesEquation || /\bgleichung\b/.test(value)) && contextual) { family = "context_equation_modeling"; confidence = 0.90; }
-  else if (explainsMethod) { family = "procedure_explanation"; confidence = 0.93; }
-  else if (reasons) { family = "statement_reasoning"; confidence = 0.90; }
-  else if (geometry && fp.actions.includes("calculate")) { family = "geometry_calculation"; confidence = 0.88; }
-  else if (data) { family = "data_analysis"; confidence = 0.82; }
-  else if (fn && graphical) { family = "function_graph"; confidence = 0.82; }
-
-  let mode: RepresentationMode = "abstract";
-  if (graphical) mode = "graphical";
-  else if (contextual) mode = "contextual";
-  else if (verbalMath) mode = "verbal_math";
-
-  const outputs: string[] = [];
-  if (asksTerm) outputs.push("term");
-  if (asksEquation || solvesEquation) outputs.push("equation");
-  if (determinesSolutionSet) outputs.push("solution_set");
-  if (fp.actions.includes("calculate")) outputs.push("number");
-  if (reasons || explainsMethod) outputs.push("reasoning");
-  if (fp.actions.includes("draw")) outputs.push("drawing");
-  return { ...fp, family, mode, outputs, confidence };
-}
-
-function fingerprintSimilarity(a: DidacticFingerprint, b: DidacticFingerprint) {
-  const concept = setJaccard(a.concepts, b.concepts);
-  const action = setJaccard(a.actions, b.actions);
-  if (concept <= 0) return action > 0 ? 0.08 * action : 0;
-  return Math.min(1, 0.72 * concept + 0.28 * action);
-}
-
-function profileCompatibility(a: TaskProfile, b: TaskProfile) {
-  const sameFamily = a.family !== "generic" && a.family === b.family;
-  const strongMismatch = a.family !== "generic" && b.family !== "generic" && a.family !== b.family;
-  const modeMismatch = a.mode !== b.mode && a.mode !== "abstract" && b.mode !== "abstract";
-  const outputOverlap = setJaccard(a.outputs, b.outputs);
-  const conceptOverlap = setJaccard(a.concepts, b.concepts);
-  const actionOverlap = setJaccard(a.actions, b.actions);
-
-  if (sameFamily) return { factor: 1, boost: 0.46, compatible: true };
-
-  // These pairs share surface vocabulary but represent different didactic tasks. They must not
-  // enter the expensive semantic duplicate queue merely because both ultimately produce a term
-  // or equation.
-  const modelingVsAbstract = new Set([a.family, b.family]);
-  if (modelingVsAbstract.has("verbal_term_translation") && modelingVsAbstract.has("context_term_modeling")) {
-    return { factor: 0.28, boost: 0, compatible: false };
-  }
-  if (modelingVsAbstract.has("equation_solving") && modelingVsAbstract.has("context_equation_modeling")) {
-    return { factor: 0.32, boost: 0, compatible: false };
-  }
-  if (strongMismatch && modeMismatch) return { factor: 0.30, boost: 0, compatible: false };
-  if (strongMismatch && actionOverlap === 0) return { factor: 0.35, boost: 0, compatible: false };
-  if (a.family !== "generic" && b.family !== "generic" && conceptOverlap === 0) return { factor: 0.42, boost: 0, compatible: false };
-  if (modeMismatch && outputOverlap === 0) return { factor: 0.55, boost: 0, compatible: false };
-  return { factor: 1, boost: 0, compatible: true };
-}
-
-
-const DISTINCTIVE_CONCEPTS = new Set([
-  "solution_set", "domain_set", "linear_system", "pythagoras", "probability", "statistics",
-  "percentage", "interest", "quadratic_function", "exponential_function", "root", "power",
-]);
-
-function tokenDice(a: string[], b: string[]) {
-  if (!a.length || !b.length) return 0;
-  const counts = new Map<string, number>();
-  for (const token of a) counts.set(token, (counts.get(token) || 0) + 1);
-  let common = 0;
-  for (const token of b) {
-    const count = counts.get(token) || 0;
-    if (count > 0) { common++; counts.set(token, count - 1); }
-  }
-  return (2 * common) / (a.length + b.length);
-}
-
-/**
- * Extracts only the mathematical shape of a task. Numbers are deliberately replaced so that
- * variants with different values still match. Domain declarations remain explicit because
- * "G = Z/Q/N" is a strong didactic feature, not an arbitrary number.
- */
-function mathStructureTokens(text: string) {
-  let value = canonical(text)
-    .replace(/(?:^|\s)\*?[a-z]\)\s*/gim, " ")
-    .replace(/\\frac\s*\{[^{}]+\}\s*\{[^{}]+\}/g, " frac ")
-    .replace(/\\sqrt\s*\{[^{}]+\}/g, " sqrt ")
-    .replace(/\bg\s*=\s*(?:in|n|z|q|r)\b/giu, (m) => ` domain_${m.split("=")[1].trim()} `)
-    .replace(/[-+]?\d+(?:[.,]\d+)?/g, " # ")
-    .replace(/(?<!\p{L})[a-z](?!\p{L})/giu, " v ");
-  return Array.from(value.matchAll(/domain_(?:in|n|z|q|r)|frac|sqrt|#|v|<=|>=|!=|=|\+|-|\*|\/|\^|\(|\)|;/giu)).map((m) => m[0]);
-}
-
-function mathStructureSimilarity(a: string, b: string) {
-  const aa = mathStructureTokens(a), bb = mathStructureTokens(b);
-  if (!aa.length || !bb.length) return 0;
-  // Token bigrams preserve operator order better than a plain bag of symbols.
-  const bigrams = (tokens: string[]) => tokens.length < 2 ? tokens : tokens.slice(0, -1).map((token, i) => `${token}>${tokens[i + 1]}`);
-  return 0.45 * tokenDice(aa, bb) + 0.55 * tokenDice(bigrams(aa), bigrams(bb));
-}
-
-function numberAgnosticTextSimilarity(a: string, b: string) {
-  const normalizeVariant = (text: string) => canonical(text)
-    .replace(/(?:^|\s)\*?[a-z]\)\s*/gim, " part ")
-    .replace(/[-+]?\d+(?:[.,]\d+)?/g, " # ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return dice(normalizeVariant(a), normalizeVariant(b));
-}
-
-type RetrievalEvidence = {
-  localScore: number;
-  retrievalScore: number;
-  structuralScore: number;
-  eligible: boolean;
-  confidentVariant: boolean;
-  signals: string[];
-};
-
-export function retrievalEvidence(aText: string, bText: string, aTitle = "", bTitle = ""): RetrievalEvidence {
-  const localScore = retrievalSimilarity(aText, bText, aTitle, bTitle);
-  const pa = taskProfile(aText, aTitle), pb = taskProfile(bText, bTitle);
-  const structuralScore = mathStructureSimilarity(aText, bText);
-  const variantText = numberAgnosticTextSimilarity(`${aTitle} ${aText}`, `${bTitle} ${bText}`);
-  const sharedConcepts = pa.concepts.filter((concept) => pb.concepts.includes(concept));
-  const sharedActions = pa.actions.filter((action) => pb.actions.includes(action));
-  const distinctive = sharedConcepts.filter((concept) => DISTINCTIVE_CONCEPTS.has(concept));
-  const sameFamily = pa.family !== "generic" && pa.family === pb.family;
-  const signals: string[] = [];
-
-  if (sameFamily) signals.push("gleicher didaktischer Aufgabentyp");
-  if (distinctive.length) signals.push(`markantes Fachmerkmal: ${distinctive.join(", ")}`);
-  if (sharedActions.length) signals.push("gleiche geforderte Schülerhandlung");
-  if (structuralScore >= 0.62) signals.push("ähnliche mathematische Struktur");
-  if (variantText >= 0.82) signals.push("sehr ähnlicher Wortlaut nach Zahlenaustausch");
-
-  // A candidate can enter semantic checking through ANY strong channel. The old v3.9 bug was
-  // that a single blended percentage could veto a very characteristic skill such as
-  // "Lösungsmenge unter Beachtung der Grundmenge".
-  const strongDidactic = sameFamily && (pa.confidence >= 0.8 || pb.confidence >= 0.8);
-  const strongDistinctive = distinctive.length > 0 && (sharedActions.length > 0 || structuralScore >= 0.40);
-  const strongStructure = structuralScore >= 0.66 && sharedActions.length > 0;
-  const eligible = strongDidactic || strongDistinctive || strongStructure || localScore >= LOCAL_GROQ_TRIGGER;
-
-  let retrievalScore = localScore;
-  if (strongDidactic) retrievalScore = Math.max(retrievalScore, 0.72 + 0.14 * structuralScore);
-  if (strongDistinctive) retrievalScore = Math.max(retrievalScore, 0.70 + 0.16 * structuralScore);
-  if (strongStructure) retrievalScore = Math.max(retrievalScore, 0.66 + 0.18 * structuralScore);
-  retrievalScore = Math.max(retrievalScore, 0.38 * variantText + 0.32 * structuralScore + 0.30 * localScore);
-
-  const confidentVariant = sameFamily && variantText >= 0.94 && structuralScore >= 0.80;
-  return {
-    localScore,
-    retrievalScore: Math.max(0, Math.min(1, retrievalScore)),
-    structuralScore,
-    eligible,
-    confidentVariant,
-    signals,
-  };
-}
-
-export function retrievalSimilarity(a: string, b: string, titleA = "", titleB = "") {
-  const lexical = similarity(a, b, titleA, titleB);
-  const pa = taskProfile(a, titleA), pb = taskProfile(b, titleB);
-  const fp = fingerprintSimilarity(pa, pb);
-  const compat = profileCompatibility(pa, pb);
-  let score = Math.max(lexical, 0.72 * fp + 0.28 * lexical);
-  if (pa.family === pb.family && pa.family !== "generic") {
-    // Same didactic family rescues differently worded variants without opening the Groq gate for
-    // every vaguely related task in the same topic.
-    score = Math.max(score, compat.boost + 0.28 * lexical + 0.18 * fp);
-  } else {
-    score *= compat.factor;
-  }
-  return Math.max(0, Math.min(1, score));
-}
 function subtaskCount(value: string) {
   return new Set(Array.from(value.matchAll(/(?:^|\n|\s)\*?([a-z])\)\s*/gim)).map((m) => m[1].toLowerCase())).size;
 }
@@ -446,81 +165,58 @@ async function allTasksForClass(classLevel: string, cache: Map<string, Awaited<R
 }
 
 function localCandidates(draft: ImportDraft, tasks: Awaited<ReturnType<typeof loadTasks>>) {
-  return tasks.map((task) => {
-    const evidence = retrievalEvidence(draft.questionText, task.questionText, draft.title, task.title);
-    return {
-      id: task.id,
-      title: task.title,
-      questionText: task.questionText,
-      classLevel: draft.classLevel,
-      topic: task.topic,
-      competence: task.competence,
-      localScore: evidence.localScore,
-      retrievalScore: evidence.retrievalScore,
-      structuralScore: evidence.structuralScore,
-      retrievalEligible: evidence.eligible,
-      retrievalSignals: evidence.signals,
-      score: evidence.localScore,
-      confidentVariant: evidence.confidentVariant,
-    } as DuplicateCandidate;
-  }).sort((a, b) => ((b as any).retrievalScore || 0) - ((a as any).retrievalScore || 0)).slice(0, MAX_LOCAL_POOL);
+  return tasks.map((task) => ({
+    id: task.id,
+    title: task.title,
+    questionText: task.questionText,
+    classLevel: draft.classLevel,
+    topic: task.topic,
+    competence: task.competence,
+    localScore: similarity(draft.questionText, task.questionText, draft.title, task.title),
+    score: similarity(draft.questionText, task.questionText, draft.title, task.title),
+  } as DuplicateCandidate)).sort((a, b) => (b.localScore || 0) - (a.localScore || 0)).slice(0, MAX_LOCAL_POOL);
 }
 
 
 function localComparisonNote(candidates: DuplicateCandidate[], pendingSemantic = false) {
-  const best = [...candidates].sort((a, b) => (b.retrievalScore ?? b.localScore ?? b.score ?? 0) - (a.retrievalScore ?? a.localScore ?? a.score ?? 0))[0];
+  const best = [...candidates].sort((a, b) => (b.localScore || b.score || 0) - (a.localScore || a.score || 0))[0];
   if (!best) return pendingSemantic
-    ? "Lokale Kandidatensuche abgeschlossen; semantische Prüfung ausstehend."
+    ? "Lokale Vorauswahl abgeschlossen; semantische Prüfung ausstehend."
     : "Vollständig lokal geprüft; keine bestehenden Vergleichsaufgaben gefunden.";
-
-  const signalText = best.retrievalSignals?.length ? ` Gründe: ${best.retrievalSignals.slice(0, 3).join(" · ")}.` : "";
-  if (!best.retrievalEligible) {
-    return pendingSemantic
-      ? `Lokale Kandidatensuche abgeschlossen; kein starker fachlicher Kandidat gefunden.${signalText}`
-      : `Vollständig lokal geprüft; kein relevanter ähnlicher Treffer gefunden.${signalText}`;
+  const raw = best.localScore ?? best.score ?? 0;
+  const score = Math.round(raw * 100);
+  if (raw < LOCAL_DISPLAY_THRESHOLD) {
+    return `Vollständig lokal geprüft; kein relevanter ähnlicher Treffer gefunden. Höchster lokaler Rohwert: ${score} %.`;
   }
-  const target = `„${best.title}“ · ${best.topic} · ${best.competence}`;
+  const target = `„${best.title}“ · ${best.topic} · ${best.competence} (${score} % lokal)`;
   return pendingSemantic
-    ? `Lokaler Kandidat für semantische Prüfung: ${target}.${signalText}`
-    : `Vollständig lokal geprüft. Relevanter lokaler Vergleich: ${target}.${signalText}`;
+    ? `Lokale Vorauswahl: relevanter Kandidat ${target}. Semantische Prüfung ausstehend.`
+    : `Vollständig lokal geprüft. Relevanter lokaler Vergleich: ${target}.`;
 }
 
 function rerankSelection(candidates: DuplicateCandidate[]) {
-  const sorted = [...candidates].sort((a, b) => (b.retrievalScore ?? b.localScore ?? 0) - (a.retrievalScore ?? a.localScore ?? 0));
-  const best = sorted[0];
+  const sorted = [...candidates].sort((a, b) => (b.localScore || 0) - (a.localScore || 0));
+  const best = sorted[0]?.localScore || 0;
 
-  // Only truly obvious variants are decided locally. This saves Groq without letting a blended
-  // retrieval score act as a semantic verdict.
-  if (best && (best.confidentVariant || ((best.localScore || 0) >= LOCAL_CONFIDENT_DUPLICATE && (best.structuralScore || 0) >= 0.85))) {
-    best.relation = "near_duplicate";
-    best.score = Math.max(0.98, best.localScore || 0);
-    best.reason ||= "Nahezu identische Aufgabenstruktur; Unterschiede bestehen im Wesentlichen nur in Zahlen bzw. kleinen Formulierungen.";
+  // Near-identical local matches do not need an LLM to tell us that they are near duplicates.
+  // This is both cheaper and more deterministic.
+  if (best >= LOCAL_CONFIDENT_DUPLICATE) {
+    const first = sorted[0];
+    first.relation = "near_duplicate";
+    first.score = Math.max(first.score, best);
+    first.reason ||= "Nahezu identischer Wortlaut bzw. mathematische Struktur (lokaler Vergleich).";
     return { shouldCallGroq: false, candidates: [] as DuplicateCandidate[] };
   }
 
-  // Important v4 rule: a candidate may qualify through a strong didactic/structural signal even
-  // when its blended local percentage is low. This specifically prevents false negatives for
-  // distinctive skills such as solution sets with explicit domains.
+  // If even the best local candidate is weak, a semantic rerank would usually spend tokens only
+  // to confirm that there is no duplicate. Keep the local result and skip Groq entirely.
+  if (best < LOCAL_GROQ_TRIGGER) return { shouldCallGroq: false, candidates: [] as DuplicateCandidate[] };
+
   const selected = sorted
-    .filter((candidate) => candidate.retrievalEligible || (candidate.retrievalScore ?? candidate.localScore ?? 0) >= LOCAL_GROQ_TRIGGER)
-    .filter((candidate) => (candidate.retrievalScore ?? candidate.localScore ?? 0) >= RERANK_CANDIDATE_FLOOR || candidate.retrievalEligible)
+    .filter((candidate) => (candidate.localScore || 0) >= RERANK_CANDIDATE_FLOOR)
     .slice(0, MAX_RERANK_CANDIDATES);
   return { shouldCallGroq: selected.length > 0, candidates: selected };
 }
-
-const RUBRIC_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    sameLearningGoal: { type: "boolean" },
-    sameStudentAction: { type: "boolean" },
-    sameMathematicalMethod: { type: "boolean" },
-    sameRepresentation: { type: "boolean" },
-    comparableStructure: { type: "boolean" },
-    sameTemplate: { type: "boolean" },
-  },
-  required: ["sameLearningGoal", "sameStudentAction", "sameMathematicalMethod", "sameRepresentation", "comparableStructure", "sameTemplate"],
-} as const;
 
 const RERANK_SCHEMA = {
   type: "object",
@@ -533,40 +229,16 @@ const RERANK_SCHEMA = {
         additionalProperties: false,
         properties: {
           candidateId: { type: "string" },
-          rubric: RUBRIC_SCHEMA,
+          relation: { type: "string", enum: ["near_duplicate", "same_skill", "related", "not_related"] },
+          score: { type: "number" },
           reason: { type: "string" },
         },
-        required: ["candidateId", "rubric", "reason"],
+        required: ["candidateId", "relation", "score", "reason"],
       },
     },
   },
   required: ["matches"],
 } as const;
-
-function semanticVerdict(rubric: SimilarityRubric) {
-  // Core gates: if learning objective or student action differs, the tasks are not duplicates,
-  // regardless of shared topic words such as "Gleichung" or "Term".
-  if (!rubric.sameLearningGoal || !rubric.sameStudentAction) {
-    return { relation: "not_related" as const, score: 0 };
-  }
-  // Same objective/action but a different mathematical method is only thematic relation.
-  if (!rubric.sameMathematicalMethod) {
-    return { relation: "related" as const, score: 0.4 };
-  }
-  // A different representation (e.g. contextual modelling vs abstract explanation) is not the
-  // same exercise type even when some mathematical vocabulary overlaps.
-  if (!rubric.sameRepresentation) {
-    return { relation: "related" as const, score: 0.45 };
-  }
-  if (rubric.comparableStructure && rubric.sameTemplate) {
-    return { relation: "near_duplicate" as const, score: 1 };
-  }
-  return { relation: "same_skill" as const, score: 0.8 };
-}
-
-function rubricPrompt() {
-  return `Bewerte jeden Vergleich ausschließlich mit sechs Ja/Nein-Kriterien. Vergib KEINE Prozentzahl und KEINE Relation; die Anwendung berechnet das Ergebnis deterministisch.\n\nKriterien:\n1. sameLearningGoal: Prüfen beide Aufgaben dasselbe konkrete Lernziel / dieselbe Teilkompetenz? Nicht nur dasselbe Oberthema.\n2. sameStudentAction: Muss der Schüler im Kern dasselbe tun (z. B. lösen, modellieren, erklären, begründen, Term bilden)?\n3. sameMathematicalMethod: Ist der wesentliche mathematische Lösungsweg bzw. das Verfahren gleich?\n4. sameRepresentation: Ist die Darstellungsform vergleichbar (abstrakt-symbolisch, mathematisch-sprachlich, Sachsituation/Modellierung, grafisch)?\n5. comparableStructure: Ist die Aufgaben-/Teilaufgabenstruktur vergleichbar?\n6. sameTemplate: Könnte man durch Austausch von Zahlen, Namen oder kleinen Formulierungen praktisch von derselben Aufgabenvorlage sprechen?\n\nWICHTIGE GRENZEN:\n- Ein Sachproblem, das durch eine Gleichung modelliert und gelöst wird, und eine Aufgabe, die nur erklärt, wie eine Äquivalenzumformung funktioniert, haben NICHT dasselbe Lernziel und NICHT dieselbe Schülerhandlung.\n- Mathematische Aussagen in einen Term übersetzen und eine Sachsituation durch einen Term modellieren haben NICHT dieselbe Repräsentation und normalerweise NICHT dasselbe konkrete Lernziel.\n- Vorgegebene Gleichungen lösen und aus einer Sachsituation erst eine Gleichung aufstellen sind unterschiedliche Schülerhandlungen.\n- Gemeinsame Wörter wie "Term", "Gleichung" oder dasselbe Kapitel reichen für KEIN Kriterium allein aus.\n- Sei streng: Bei Unsicherheit antworte false.\n\nDie Begründung soll kurz benennen, welche Kernkriterien übereinstimmen oder nicht.`;
-}
 
 async function rerankWithGroq(draft: ImportDraft, candidates: DuplicateCandidate[]) {
   const apiKey = process.env.GROQ_API_KEY?.trim();
@@ -574,7 +246,16 @@ async function rerankWithGroq(draft: ImportDraft, candidates: DuplicateCandidate
   const selection = rerankSelection(candidates);
   if (!selection.shouldCallGroq) return { candidates: candidates.sort((a, b) => b.score - a.score), usedGroq: false };
   const rerankCandidates = selection.candidates;
-  const prompt = `Vergleiche EINE neue Mathematikaufgabe mit bestehenden Aufgaben. Die lokale Stufe dient ausschließlich der Kandidatensuche.\n\n${rubricPrompt()}\n\nVerwende ausschließlich die gelieferten candidateId-Werte.\n\nNEUE AUFGABE:\nTitel: ${draft.title}\n${draft.questionText.slice(0, 1800)}\n\nKANDIDATEN:\n${rerankCandidates.map((c, i) => `#${i + 1} candidateId=${c.id}\nTitel: ${c.title}\nThema: ${c.topic}; Kompetenz: ${c.competence}\nLokale Signale: ${(c.retrievalSignals || []).join("; ") || "keine"}\n${c.questionText.slice(0, 650)}`).join("\n\n")}`;
+  const prompt = `Vergleiche EINE neue Mathematikaufgabe mit bestehenden Aufgaben. Entscheide didaktisch, ob es praktisch dieselbe Aufgabe/Variante ist, nur dieselbe mathematische Fertigkeit prüft, lediglich thematisch verwandt ist oder nicht verwandt ist.
+
+Bewerte NICHT nach identischen Zahlen allein. Andere Zahlen bei ansonsten gleicher mathematischer Handlung und Struktur können eine near_duplicate-Variante sein. Ein gemeinsames Oberthema (z. B. „Gleichungen“ oder „Terme“) reicht ausdrücklich NICHT. Entscheidend sind die konkrete Schülerhandlung, der Lösungsweg und die Aufgabenstruktur. Eine Erklär-/Begründungsaufgabe ist nicht ähnlich zu einer Anwendungs-/Sachaufgabe nur weil beide dasselbe Thema betreffen. Es ist ausdrücklich erlaubt, ALLE Kandidaten als not_related zu markieren. Erzwinge keinen Treffer. Gib für jeden Kandidaten eine score zwischen 0 und 1 und eine sehr kurze Begründung. Verwende ausschließlich die gelieferten candidateId-Werte.
+
+NEUE AUFGABE:
+Titel: ${draft.title}
+${draft.questionText.slice(0, 1800)}
+
+KANDIDATEN:
+${rerankCandidates.map((c, i) => `#${i + 1} candidateId=${c.id}\nTitel: ${c.title}\nThema: ${c.topic}; Kompetenz: ${c.competence}\n${c.questionText.slice(0, 650)}`).join("\n\n")}`;
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -583,8 +264,8 @@ async function rerankWithGroq(draft: ImportDraft, candidates: DuplicateCandidate
       messages: [{ role: "user", content: prompt }],
       reasoning_effort: "low",
       reasoning_format: "hidden",
-      response_format: { type: "json_schema", json_schema: { name: "duplicate_rubric", strict: true, schema: RERANK_SCHEMA } },
-      max_completion_tokens: 320,
+      response_format: { type: "json_schema", json_schema: { name: "duplicate_rerank", strict: true, schema: RERANK_SCHEMA } },
+      max_completion_tokens: 600,
     }),
     cache: "no-store",
   });
@@ -606,24 +287,14 @@ async function rerankWithGroq(draft: ImportDraft, candidates: DuplicateCandidate
   for (const match of parsed.matches || []) {
     const candidate = byId.get(String(match.candidateId));
     if (!candidate) continue;
-    const rubric = match.rubric as SimilarityRubric;
-    const verdict = semanticVerdict(rubric);
-    candidate.rubric = rubric;
-    candidate.relation = verdict.relation;
-    candidate.score = verdict.score;
-    candidate.reason = String(match.reason || "").slice(0, 260);
+    candidate.relation = match.relation;
+    candidate.reason = String(match.reason || "").slice(0, 240);
+    const modelScore = Math.max(0, Math.min(1, Number(match.score) || 0));
+    // The semantic model is the final judge, while the local score still guards against an
+    // isolated overconfident answer.
+    candidate.score = Math.max(0, Math.min(1, 0.82 * modelScore + 0.18 * (candidate.localScore || 0)));
   }
   return { candidates: candidates.sort((a, b) => b.score - a.score), usedGroq: true };
-}
-
-function visibleCandidates(candidates: DuplicateCandidate[], usedGroq: boolean) {
-  // Once Groq has judged the shortlist, only semantically judged candidates may be shown as
-  // similarity results. Unreranked retrieval candidates are kept in duplicatePool for diagnostics
-  // but must not masquerade as semantic matches.
-  return candidates
-    .filter((candidate) => usedGroq ? (candidate.relation === "near_duplicate" || candidate.relation === "same_skill") : candidate.score >= 0.52)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5);
 }
 
 export async function addDuplicateCandidates(drafts: ImportDraft[], options: { llmRerank?: boolean } = {}) {
@@ -647,38 +318,18 @@ export async function addDuplicateCandidates(drafts: ImportDraft[], options: { l
         ? "Lokale Vorauswahl und semantische Groq-Prüfung abgeschlossen."
         : localComparisonNote(candidates, false);
     }
-    const visible = visibleCandidates(candidates, draft.duplicateCheckStatus === "groq");
+    const visible = candidates.filter((candidate) => candidate.score >= (candidate.relation ? 0.45 : 0.42)).slice(0, 5);
     draft.duplicates = visible;
     draft.duplicate = visible[0];
-    if (draft.duplicate?.relation === "near_duplicate") draft.include = false;
+    if (draft.duplicate?.relation === "near_duplicate" && draft.duplicate.score >= 0.97) draft.include = false;
     else if (!draft.duplicate?.relation && (draft.duplicate?.score || 0) >= 0.98) draft.include = false;
   }
   return drafts;
 }
 
 export async function rerankDuplicateCandidates(draft: ImportDraft) {
-  const existing = (draft.duplicatePool?.length ? draft.duplicatePool : draft.duplicates || []).map((candidate) => ({ ...candidate }));
-  if (!existing.length) {
-    draft.duplicateNeedsRerank = false;
-    draft.duplicateCheckStatus = "local";
-    draft.duplicateCheckNote = localComparisonNote([], false);
-    return draft;
-  }
-  const reranked = process.env.GROQ_API_KEY?.trim()
-    ? await rerankWithGroq(draft, existing)
-    : { candidates: existing, usedGroq: false };
-  const candidates = reranked.candidates;
-  const visible = visibleCandidates(candidates, reranked.usedGroq);
-  draft.duplicatePool = candidates.slice(0, MAX_LOCAL_POOL);
-  draft.duplicates = visible;
-  draft.duplicate = visible[0];
-  draft.duplicateNeedsRerank = false;
-  draft.duplicateCheckStatus = reranked.usedGroq ? "groq" : "local";
-  draft.duplicateCheckNote = reranked.usedGroq
-    ? "Lokale Vorauswahl und semantische Groq-Prüfung abgeschlossen."
-    : localComparisonNote(candidates, false);
-  if (draft.duplicate?.relation === "near_duplicate") draft.include = false;
-  return draft;
+  const [result] = await rerankDuplicateCandidatesBatch([draft]);
+  return result || draft;
 }
 
 const BATCH_RERANK_SCHEMA = {
@@ -699,10 +350,11 @@ const BATCH_RERANK_SCHEMA = {
               additionalProperties: false,
               properties: {
                 candidateId: { type: "string" },
-                rubric: RUBRIC_SCHEMA,
+                relation: { type: "string", enum: ["near_duplicate", "same_skill", "related", "not_related"] },
+                score: { type: "number" },
                 reason: { type: "string" },
               },
-              required: ["candidateId", "rubric", "reason"],
+              required: ["candidateId", "relation", "score", "reason"],
             },
           },
         },
@@ -713,26 +365,37 @@ const BATCH_RERANK_SCHEMA = {
   required: ["results"],
 } as const;
 
+function groqVisibleCandidates(candidates: DuplicateCandidate[]) {
+  // After semantic checking, never surface an unjudged local runner-up as an "Ähnlichkeit".
+  // This was one source of confusing matches in later versions.
+  return candidates
+    .filter((candidate) => candidate.relation === "near_duplicate" || candidate.relation === "same_skill")
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5);
+}
+
 /**
- * Reranks up to four ambiguous tasks in one Groq request. The repeated semantic instructions are
- * therefore paid once per batch instead of once per task. Only the top two locally compatible
- * candidates per task are sent to the model.
+ * Batch version of the restored v3.7 semantic reranker. Up to four imported tasks share one
+ * Groq prompt, but each task may still send the five best v3.7-style candidates. This keeps the
+ * recall that worked well before v3.8 without returning to one request per task.
  */
 export async function rerankDuplicateCandidatesBatch(inputDrafts: ImportDraft[]) {
   const drafts = inputDrafts.slice(0, 4).map((draft) => ({ ...draft }));
   const apiKey = process.env.GROQ_API_KEY?.trim();
-  if (!apiKey || !drafts.length) return drafts.map((draft) => ({ ...draft, duplicateNeedsRerank: false, duplicateCheckStatus: "local" as const }));
+  if (!apiKey || !drafts.length) {
+    return drafts.map((draft) => ({ ...draft, duplicateNeedsRerank: false, duplicateCheckStatus: "local" as const }));
+  }
 
   const prepared = drafts.map((draft) => {
     const existing = (draft.duplicatePool?.length ? draft.duplicatePool : draft.duplicates || []).map((candidate) => ({ ...candidate }));
     const selection = rerankSelection(existing);
-    return { draft, existing, selection, selected: selection.candidates.slice(0, 2) };
+    return { draft, existing, selection, selected: selection.candidates.slice(0, MAX_RERANK_CANDIDATES) };
   });
 
   const active = prepared.filter((item) => item.selection.shouldCallGroq && item.selected.length);
   if (!active.length) {
     return prepared.map(({ draft, existing }) => {
-      const visible = visibleCandidates(existing, false);
+      const visible = existing.filter((candidate) => candidate.score >= LOCAL_DISPLAY_THRESHOLD).slice(0, 5);
       return {
         ...draft,
         duplicatePool: existing.slice(0, MAX_LOCAL_POOL),
@@ -745,7 +408,15 @@ export async function rerankDuplicateCandidatesBatch(inputDrafts: ImportDraft[])
     });
   }
 
-  const prompt = `Prüfe mehrere Mathematikaufgaben paarweise. Die lokale Stufe dient ausschließlich der Kandidatensuche.\n\n${rubricPrompt()}\n\nVerwende ausschließlich die gelieferten draftId- und candidateId-Werte.\n\n${active.map(({ draft, selected }, taskIndex) => `TASK ${taskIndex + 1} draftId=${draft.id}\nNEU: ${draft.title}\n${draft.questionText.slice(0, 700)}\nKANDIDATEN:\n${selected.map((candidate, i) => `${i + 1}. candidateId=${candidate.id}\n${candidate.title} · ${candidate.topic} · ${candidate.competence}\nLokale Signale: ${(candidate.retrievalSignals || []).join("; ") || "keine"}\n${candidate.questionText.slice(0, 350)}`).join("\n")}`).join("\n\n---\n\n")}`;
+  const instructions = `Vergleiche mehrere neue Mathematikaufgaben jeweils mit ihren bestehenden Kandidaten.\n\n` +
+    `Klassifiziere jeden Kandidaten unabhängig als:\n` +
+    `- near_duplicate: praktisch dieselbe Aufgabe/Variante; Zahlen oder Kontextdetails dürfen verändert sein, aber Schülerhandlung, mathematischer Lösungsweg und Struktur sind nahezu gleich.\n` +
+    `- same_skill: gleicher konkreter Aufgabentyp und dieselbe mathematische Fertigkeit; als Übungsvarianten sinnvoll austauschbar.\n` +
+    `- related: nur thematisch/fachlich verwandt, aber anderer Aufgabentyp oder andere Schülerhandlung.\n` +
+    `- not_related: keine relevante Ähnlichkeit.\n\n` +
+    `WICHTIG: Gleiche Oberbegriffe wie „Terme“, „Gleichungen“, „Flächen“ usw. reichen NICHT. Eine Erklär-/Begründungsaufgabe ist nicht ähnlich zu einer Sach-/Anwendungsaufgabe nur wegen desselben Themas. Eine Sachmodellierung ist nicht automatisch ähnlich zu einer rein algebraischen Aufgabe, nur weil beide am Ende einen Term oder eine Gleichung verwenden. Es ist ausdrücklich erlaubt, alle Kandidaten als not_related zu markieren. Erzwinge keinen Treffer. Die score ist nur intern für die Rangfolge: near_duplicate typischerweise 0.85–1, same_skill 0.65–0.84, related 0.30–0.64, not_related 0–0.29.`;
+
+  const prompt = `${instructions}\n\nVerwende ausschließlich die gelieferten draftId- und candidateId-Werte.\n\n${active.map(({ draft, selected }, taskIndex) => `TASK ${taskIndex + 1} draftId=${draft.id}\nNEUE AUFGABE:\nTitel: ${draft.title}\n${draft.questionText.slice(0, 900)}\n\nKANDIDATEN:\n${selected.map((candidate, i) => `${i + 1}. candidateId=${candidate.id}\nTitel: ${candidate.title}\nThema: ${candidate.topic}; Kompetenz: ${candidate.competence}\n${candidate.questionText.slice(0, 420)}`).join("\n\n")}`).join("\n\n---\n\n")}`;
 
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -755,8 +426,8 @@ export async function rerankDuplicateCandidatesBatch(inputDrafts: ImportDraft[])
       messages: [{ role: "user", content: prompt }],
       reasoning_effort: "low",
       reasoning_format: "hidden",
-      response_format: { type: "json_schema", json_schema: { name: "duplicate_batch_rubric", strict: true, schema: BATCH_RERANK_SCHEMA } },
-      max_completion_tokens: 460,
+      response_format: { type: "json_schema", json_schema: { name: "duplicate_batch_v37", strict: true, schema: BATCH_RERANK_SCHEMA } },
+      max_completion_tokens: 700,
     }),
     cache: "no-store",
   });
@@ -769,6 +440,7 @@ export async function rerankDuplicateCandidatesBatch(inputDrafts: ImportDraft[])
       duplicateRateLimitInfo(response),
     );
   }
+
   const data = await response.json();
   const raw = data?.choices?.[0]?.message?.content;
   if (typeof raw !== "string") throw new DuplicateRerankError("Groq-Ähnlichkeitsanalyse hat keine JSON-Ausgabe geliefert.", 502, duplicateRateLimitInfo(response));
@@ -784,9 +456,10 @@ export async function rerankDuplicateCandidatesBatch(inputDrafts: ImportDraft[])
     const missing = selected.filter((candidate) => !returnedIds.has(candidate.id));
     if (missing.length) throw new DuplicateRerankError(`Groq hat nicht alle Vergleichskandidaten für Aufgabe ${draft.id} bewertet.`, 502);
   }
+
   return prepared.map(({ draft, existing, selection, selected }) => {
     if (!selection.shouldCallGroq || !selected.length) {
-      const visible = visibleCandidates(existing, false);
+      const visible = existing.filter((candidate) => candidate.score >= LOCAL_DISPLAY_THRESHOLD).slice(0, 5);
       return {
         ...draft,
         duplicatePool: existing.slice(0, MAX_LOCAL_POOL),
@@ -803,15 +476,15 @@ export async function rerankDuplicateCandidatesBatch(inputDrafts: ImportDraft[])
     for (const match of result?.matches || []) {
       const candidate = byId.get(String(match.candidateId));
       if (!candidate) continue;
-      const rubric = match.rubric as SimilarityRubric;
-      const verdict = semanticVerdict(rubric);
-      candidate.rubric = rubric;
-      candidate.relation = verdict.relation;
-      candidate.score = verdict.score;
+      candidate.relation = match.relation;
       candidate.reason = String(match.reason || "").slice(0, 260);
+      const modelScore = Math.max(0, Math.min(1, Number(match.score) || 0));
+      // Keep the successful v3.7 behavior: Groq is primary, but local evidence prevents an
+      // isolated overconfident semantic result from completely dominating the rank.
+      candidate.score = Math.max(0, Math.min(1, 0.82 * modelScore + 0.18 * (candidate.localScore || 0)));
     }
     const sorted = existing.sort((a, b) => b.score - a.score);
-    const visible = visibleCandidates(sorted, true);
+    const visible = groqVisibleCandidates(sorted);
     const duplicate = visible[0];
     return {
       ...draft,
@@ -820,8 +493,10 @@ export async function rerankDuplicateCandidatesBatch(inputDrafts: ImportDraft[])
       duplicate,
       duplicateNeedsRerank: false,
       duplicateCheckStatus: "groq" as const,
-      duplicateCheckNote: "Lokale Vorauswahl und semantische Groq-Prüfung abgeschlossen.",
-      include: duplicate?.relation === "near_duplicate" ? false : draft.include,
+      duplicateCheckNote: visible.length
+        ? "Lokale Vorauswahl nach dem bewährten v3.7-Verfahren und semantische Groq-Prüfung abgeschlossen."
+        : "Semantisch geprüft; unter den lokalen Kandidaten wurde keine relevante ähnliche Aufgabe bestätigt.",
+      include: duplicate?.relation === "near_duplicate" && duplicate.score >= 0.90 ? false : draft.include,
     };
   });
 }

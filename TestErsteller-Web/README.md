@@ -1,3 +1,15 @@
+# v4.2 – Rückkehr zur bewährten v3.7-Ähnlichkeitssuche
+
+Die Ähnlichkeits-Engine wurde bewusst auf den letzten stabilen Retrieval-Kern aus v3.7 zurückgeführt. Die ab v3.8 eingeführten didaktischen Fingerprints, Profil-Boosts und späteren Hybrid-Gates wurden aus der Kandidatenauswahl entfernt, weil sie grobe thematische Gemeinsamkeiten teilweise höher gewichteten als tatsächlich ähnliche Aufgaben.
+
+Beibehalten wurden die späteren technischen Verbesserungen: klassenweite Suche über alle Themen/K1–K6, Browser-Queue mit Retry bei Groq-429, Batch-Prüfung mehrerer Aufgaben, vollständiges Aufklappen der bestehenden Vergleichsaufgabe und keine sichtbaren Ähnlichkeits-Prozentwerte.
+
+Für mehr Recall als im ursprünglichen v3.7 wird ein semantischer Groq-Vergleich bereits ab 22 % lokalem Retrievalwert ausgelöst (Kandidatenboden 18 %). Dabei werden höchstens die fünf besten Kandidaten nach der alten v3.7-Text-/Mathe-Suche geprüft. Grob thematische, aber lexikalisch und strukturell unpassende Aufgaben wie „Alters-Sachaufgabe“ vs. „Äquivalenzumformung erklären“ oder „sprachliche Termbildung“ vs. „Johannisbeer-Modellierung“ liegen lokal deutlich darunter und gelangen nicht in die semantische Trefferanzeige.
+
+Nach einer Groq-Prüfung werden ausschließlich Kandidaten angezeigt, die Groq als `same_skill` oder `near_duplicate` bestätigt hat. Nicht geprüfte lokale Runner-ups können nicht mehr nachträglich als vermeintliche Ähnlichkeit erscheinen. Groq darf ausdrücklich alle Kandidaten als `not_related` bewerten; ein Treffer wird nicht erzwungen.
+
+---
+
 # v4.1 – transparente Ähnlichkeitsprüfung ohne Schein-Prozente
 
 Die semantische Ähnlichkeitsanalyse verwendet keine frei vom LLM vergebenen Prozentwerte mehr. Groq beantwortet für jeden Vergleich nur noch sechs feste Ja/Nein-Kriterien: gleiches konkretes Lernziel, gleiche Schülerhandlung, gleicher mathematischer Lösungsweg, gleiche Darstellungsform, vergleichbare Aufgabenstruktur und nahezu gleiche Vorlage. Die Anwendung leitet daraus deterministisch `near_duplicate`, `same_skill`, `related` oder `not_related` ab.
