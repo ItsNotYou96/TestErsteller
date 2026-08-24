@@ -1,22 +1,37 @@
-# v4.3 Validation
+# v4.4 Validation
 
-## Groq-Fallback
+## Mathematische Struktur-Normalisierung
 
-- Automatisches Warten nur bei kurzen 429-Resets bis 60 Sekunden.
-- Nach zwei kurzen Rate-Limit-Retries wird ebenfalls nicht weiter blockiert.
-- Metadaten: bei langem Reset wird der restliche Metadatenlauf heuristisch belassen statt z. B. 1201 Sekunden zu warten.
-- Ähnlichkeitsprüfung: bei langem Reset werden der aktuelle und alle restlichen pending Kandidaten auf `local` gesetzt; lokale Vergleichskandidaten bleiben sichtbar.
-- Visuelle Mathekorrektur: lange Rate-Limits blockieren den Import nicht mehr.
+Getestete Regressionen:
 
-## Lokale Ähnlichkeit
+- `Löse die Gleichung und bestimme die Lösungsmenge ...` vs. `Gib die Lösungsmenge an und beachte dabei die Grundmenge ...`
+  - alter Wortlaut-/Tokenwert: ca. 25 %
+  - struktureller Match: stark (`confidentSameSkill=true`)
+  - gemeinsame Signale: lineare Gleichungen lösen, Lösungsmenge bestimmen, gleiche Schülerhandlung; Grundmenge nur Zusatzanforderung
+  - Ergebnis: lokal als gleicher Aufgabentyp erkennbar, kein Groq nötig
+- Nadja/Mutter-Altersaufgabe vs. `Erkläre ... Äquivalenzumformung`
+  - strukturell schwach, kein sicherer Match
+- sprachliche Aussage → Term vs. Johannisbeer-Sachmodellierung → Term
+  - wegen unterschiedlicher Repräsentation/Modellierungsart kein sicherer Match
+- zwei unterschiedlich formulierte sprachliche Termbildungsaufgaben
+  - strukturell starker Match
+- Quadrat/Umfang/Flächeninhalt vs. Aussagen über negative Zahlen
+  - strukturell schwach
 
-- Sichtbare lokale Kandidaten ab 18 % Retrieval-/Suchwert.
-- Bis zu fünf Kandidaten werden vollständig aufklappbar angezeigt.
-- Die Oberfläche bezeichnet sie ausdrücklich als **lokale Suchkandidaten**, nicht als bestätigte Ähnlichkeit.
-- Groq-Reranking wird wieder erst ab 34 % bestem lokalen Suchwert ausgelöst. Dadurch werden 18–33-%-Kandidaten sichtbar, verbrauchen aber keine Groq-Tokens.
-- Lokale Kandidaten bleiben auch sichtbar, wenn Groq erfolgreich keinen Treffer bestätigt oder die KI-Prüfung wegen Rate-Limits ausfällt.
+## Adminanzeige
+
+- Keine sichtbaren lokalen Prozentwerte mehr.
+- Bis zu fünf lokale Kandidaten bleiben vollständig aufklappbar.
+- Kandidaten werden als `Starker`, `Guter`, `Plausibler` oder `Weiterer lokaler Kandidat` bezeichnet.
+- Fachliche Gemeinsamkeiten werden als lokale Signale angezeigt.
+
+## Groq
+
+- Eindeutige strukturelle Matches werden lokal entschieden und verbrauchen keine Groq-Tokens.
+- Unklare Fälle senden höchstens drei Kandidaten pro Aufgabe an Groq.
+- v4.3-Fallback bei langen Rate-Limit-Resets bleibt bestehen.
 
 ## Technische Prüfung
 
-- 29 ausführbare `.ts`/`.tsx`-Dateien mit TypeScript 5.8.3 `transpileModule` geprüft: 0 Syntaxdiagnosen.
 - Keine neuen npm-Pakete oder Environment-Variablen.
+- TypeScript-Syntax/Transpilierbarkeit der ausführbaren TS/TSX-Dateien wird vor Packaging geprüft.

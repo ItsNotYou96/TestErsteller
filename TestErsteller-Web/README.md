@@ -1,3 +1,15 @@
+# v4.4 – mathematische Struktur statt Wortlaut-Prozent
+
+Die lokale Ähnlichkeitssuche abstrahiert mathematische Aufgaben jetzt zusätzlich strukturell. Konkrete Zahlen/Konstanten werden für den Vergleich ersetzt, Gleichungsformen werden als Operator-/Variablenstruktur verglichen und explizite Lernziele/Schülerhandlungen werden erkannt. Dadurch können zwei Aufgaben zum Lösen linearer Gleichungen und Bestimmen der Lösungsmenge als derselbe Aufgabentyp erkannt werden, obwohl Zahlen, Terme und Formulierungen deutlich verschieden sind. Eine zusätzliche Grundmengen-Bedingung gilt dabei als Zusatzanforderung und zerstört den Kernmatch nicht.
+
+Die lokale Adminanzeige zeigt keine Prozentzahl mehr. Der frühere Suchwert war nur ein technischer Retrievalwert und wurde zu leicht als fachliche Ähnlichkeit interpretiert. Stattdessen stehen dort Stufen wie **Starker lokaler Kandidat**, **Plausibler lokaler Kandidat** und konkrete fachliche Gemeinsamkeiten, z. B. `lineare Gleichungen lösen`, `Lösungsmenge bestimmen`, `ähnliche algebraische Gleichungsstruktur`. Schwächere lokale Kandidaten bleiben weiterhin ab der bisherigen internen 18%-Retrievalschwelle sichtbar und vollständig aufklappbar.
+
+Ein strukturell eindeutiger lokaler Treffer wird ohne Groq als `Gleicher Aufgabentyp` bestätigt. Dadurch spart die Ähnlichkeitsprüfung Tokens. Für unklare Fälle bleibt das Groq-Reranking bestehen, prüft aber höchstens noch drei lokale Kandidaten pro Aufgabe. Das Rate-Limit-Fallback aus v4.3 bleibt unverändert: lange Groq-Resets blockieren den Import nicht.
+
+Regressionen: Die beiden Gleichungsaufgaben `Löse ... und bestimme die Lösungsmenge` und `Gib die Lösungsmenge an und beachte dabei die Grundmenge` werden trotz nur ca. 25% alter Textähnlichkeit strukturell als derselbe konkrete Aufgabentyp erkannt. Dagegen bleiben Nadja/Mutter vs. `Äquivalenzumformung erklären`, sprachliche Termbildung vs. Johannisbeer-Sachmodellierung und Quadrat/Flächeninhalt vs. Aussagen über negative Zahlen klar getrennt.
+
+---
+
 # v4.3 – Groq-Limits blockieren den Import nicht mehr
 
 Groq-Rate-Limits werden jetzt bewusst als optionaler Verfeinerungsschritt behandelt. Kurze 429-Wartezeiten (bis 60 Sekunden) werden weiterhin automatisch wiederholt. Meldet Groq jedoch einen langen Reset – z. B. 1201 Sekunden – wartet die Adminseite nicht mehr minutenlang. Die jeweilige KI-Phase wird für diesen Import übersprungen und die bereits vorhandenen heuristischen bzw. lokalen Ergebnisse bleiben vollständig nutzbar. Nach zwei kurzen Rate-Limit-Retries wird ebenfalls lokal weitergearbeitet.

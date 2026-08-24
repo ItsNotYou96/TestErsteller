@@ -436,8 +436,12 @@ export default function AdminPage() {
     return localComparisons(draft)[0];
   }
 
-  function localCandidatePercent(candidate: NonNullable<ImportDraft["duplicate"]>) {
-    return Math.round((candidate.retrievalScore ?? candidate.localScore ?? candidate.score ?? 0) * 100);
+  function localCandidateLevel(candidate: NonNullable<ImportDraft["duplicate"]>) {
+    if (candidate.confidentVariant || candidate.relation === "near_duplicate" || candidate.relation === "same_skill") return "Starker lokaler Kandidat";
+    const score = candidate.retrievalScore ?? candidate.localScore ?? candidate.score ?? 0;
+    if (score >= 0.50) return "Guter lokaler Kandidat";
+    if (score >= 0.34) return "Plausibler lokaler Kandidat";
+    return "Weiterer lokaler Kandidat";
   }
 
   function duplicateStatusLabel(draft: ImportDraft) {
@@ -611,7 +615,7 @@ export default function AdminPage() {
               {drafts.map((draft, index) => (
                 <button key={draft.id} className={`adminDraftCard ${selected?.id === draft.id ? "active" : ""} ${!draft.include ? "excluded" : ""}`} onClick={() => setSelectedId(draft.id)}>
                   <span className="adminDraftIndex">{index + 1}</span>
-                  <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P.{draft.pointsSource === "heuristic" ? " (geschätzt)" : ""} · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}{draft.segmentationConfidence ? ` · Struktur ${Math.round(draft.segmentationConfidence * 100)}%` : ""}{draft.mathRepair === "visual" ? " · Mathe visuell korrigiert" : draft.mathRepair === "checking" ? " · Mathe wird geprüft" : draft.mathRepair === "needed" ? " · Mathe-Reparatur wartet" : draft.mathRepair === "rejected" || draft.mathRepair === "failed" ? " · Mathe-Korrektur fehlgeschlagen" : ""}</small>{draft.duplicateCheckStatus !== "groq" && relevantLocalComparison(draft) && (() => { const candidate = relevantLocalComparison(draft)!; return <small title={`${candidate.title} · ${candidate.topic} · ${candidate.competence}`}>Lokaler Kandidat ({localCandidatePercent(candidate)} % Suchwert): {candidate.title} · {candidate.topic} · {candidate.competence}</small>; })()}</span>
+                  <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P.{draft.pointsSource === "heuristic" ? " (geschätzt)" : ""} · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}{draft.segmentationConfidence ? ` · Struktur ${Math.round(draft.segmentationConfidence * 100)}%` : ""}{draft.mathRepair === "visual" ? " · Mathe visuell korrigiert" : draft.mathRepair === "checking" ? " · Mathe wird geprüft" : draft.mathRepair === "needed" ? " · Mathe-Reparatur wartet" : draft.mathRepair === "rejected" || draft.mathRepair === "failed" ? " · Mathe-Korrektur fehlgeschlagen" : ""}</small>{draft.duplicateCheckStatus !== "groq" && relevantLocalComparison(draft) && (() => { const candidate = relevantLocalComparison(draft)!; return <small title={`${candidate.title} · ${candidate.topic} · ${candidate.competence}`}>{localCandidateLevel(candidate)}: {candidate.title} · {candidate.topic} · {candidate.competence}</small>; })()}</span>
                   <span className="adminDraftBadges">
                     <em className={`duplicateStatus ${draft.duplicateCheckStatus || "pending"}`}>{duplicateStatusLabel(draft)}</em>
                     {draft.duplicate && <em className={draft.duplicate.relation === "near_duplicate" ? "danger" : "warn"}>{duplicateLabel(draft.duplicate.relation)}</em>}
@@ -649,10 +653,10 @@ export default function AdminPage() {
                 {!selected.duplicate && localComparisons(selected).length > 0 && (
                   <section className="adminDuplicate adminDuplicateLocal">
                     <div><FileSearch size={18} /><strong>Lokale Vergleichskandidaten</strong></div>
-                    <p className="adminDuplicateReason">Diese Treffer sind nur lokale Suchkandidaten, keine bestätigte Ähnlichkeit. Angezeigt werden bis zu fünf Aufgaben ab 18 % Suchwert.</p>
+                    <p className="adminDuplicateReason">Diese Treffer sind lokale Vergleichskandidaten. Die frühere Prozentanzeige wurde entfernt, weil der technische Suchwert keine fachliche Ähnlichkeits-Prozentzahl darstellt. Auch schwächere Treffer bleiben weiterhin sichtbar.</p>
                     {localComparisons(selected).map((candidate, index) => (
                       <details key={candidate.id} open={index === 0}>
-                        <summary>{candidate.title} · {candidate.topic} · {candidate.competence} · {localCandidatePercent(candidate)} % Suchwert</summary>
+                        <summary>{localCandidateLevel(candidate)} · {candidate.title} · {candidate.topic} · {candidate.competence}</summary>
                         {candidate.retrievalSignals?.length ? <p className="adminDuplicateReason"><b>Lokale Signale:</b> {candidate.retrievalSignals.join(" · ")}</p> : null}
                         <div className="adminExistingQuestion"><LatexText text={candidate.questionText} /></div>
                       </details>

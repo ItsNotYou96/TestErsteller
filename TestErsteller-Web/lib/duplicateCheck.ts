@@ -12,13 +12,14 @@ const STOPWORDS = new Set([
 // Duplicate analysis is intentionally two-stage: cheap local retrieval over the whole class,
 // then Groq only for genuinely ambiguous/suspicious candidates. This keeps the Free Tier usable
 // even when many documents are imported in one session.
-// v4.2 deliberately restores the v3.7 retrieval engine. The later didactic-profile
-// boosts (v3.8-v4.1) caused generic thematic matches to displace genuinely similar tasks.
-// Local similarity is ONLY a retrieval signal. v4.3 shows candidates from 18%, but only spends Groq tokens when the best local hit reaches 34%.
+// v4.4 keeps the stable text retrieval from v3.7 but adds a deterministic mathematical
+// structure layer: constants are abstracted, equation shapes are compared, and explicit
+// learning goals such as "solve linear equation + determine solution set" can establish a
+// strong local match without spending Groq tokens. Weak candidates remain visible from 18%.
 const LOCAL_GROQ_TRIGGER = 0.34;
 const LOCAL_CONFIDENT_DUPLICATE = 0.96;
 const RERANK_CANDIDATE_FLOOR = 0.18;
-const MAX_RERANK_CANDIDATES = 5;
+const MAX_RERANK_CANDIDATES = 3;
 const MAX_LOCAL_POOL = 12;
 const LOCAL_DISPLAY_THRESHOLD = 0.18;
 
@@ -129,6 +130,195 @@ function subtaskCount(value: string) {
   return new Set(Array.from(value.matchAll(/(?:^|\n|\s)\*?([a-z])\)\s*/gim)).map((m) => m[1].toLowerCase())).size;
 }
 
+type MathFingerprint = {
+  goals: string[];
+  actions: string[];
+  representations: string[];
+  equationShapes: string[];
+  equationOperators: string[];
+  equationCount: number;
+  subtasks: number;
+};
+
+const GOAL_LABELS: Record<string, string> = {
+  solve_linear_equation: "lineare Gleichungen lösen",
+  solution_set: "Lösungsmenge bestimmen",
+  domain_restriction: "Grundmenge berücksichtigen",
+  verbal_to_term: "sprachliche Aussage in einen Term übersetzen",
+  context_to_term: "Sachkontext durch einen Term modellieren",
+  simplify_term: "Terme vereinfachen",
+  explain_procedure: "mathematisches Verfahren erklären",
+  verify_statement: "Aussagen prüfen und begründen",
+  geometry_calculation: "geometrische Größen berechnen",
+  context_equation: "Sachkontext mit einer Gleichung modellieren",
+};
+
+const ACTION_LABELS: Record<string, string> = {
+  solve: "gleiche Schülerhandlung: lösen",
+  determine_set: "gleiche Schülerhandlung: Lösungsmenge angeben",
+  form_term: "gleiche Schülerhandlung: Term bilden",
+  simplify: "gleiche Schülerhandlung: vereinfachen",
+  explain: "gleiche Schülerhandlung: erklären",
+  verify: "gleiche Schülerhandlung: prüfen/begründen",
+  calculate: "gleiche Schülerhandlung: berechnen",
+  model: "gleiche Schülerhandlung: modellieren",
+};
+
+function unique(values: string[]) {
+  return Array.from(new Set(values));
+}
+
+function hasContextSignals(value: string) {
+  const text = canonical(value);
+  return /\b(?:euro|€|jahre?|monat(?:e|lich)?|preis|kostet|gewicht|schalen?|obststand|tablet|taschengeld|tore?|fußball|fussball|mutter|vater|brüder|brueder|nadja|maria|j(?:ö|oe)rg|martin|oliver|packung|pralinen|verkauft|seitenlänge|seitenlaenge|umfang|flächeninhalt|flaecheninhalt)\b/.test(text)
+    || /\bwie (?:viele|alt|teuer|lang|groß|gross)\b/.test(text);
+}
+
+function normalizeEquationShape(raw: string) {
+  return canonical(raw)
+    .replace(/g\s*=\s*(?:in|n|z|q|r|ℕ|ℤ|ℚ|ℝ)\b/gi, "")
+    .replace(/\\frac\s*\{[^{}]*\}\s*\{[^{}]*\}/g, "#/#")
+    .replace(/\d+(?:[.,]\d+)?/g, "#")
+    .replace(/(?<!\p{L})[a-z](?!\p{L})/giu, "V")
+    .replace(/\p{L}{2,}/gu, "")
+    .replace(/\s+/g, "")
+    .replace(/#V/g, "#*V")
+    .replace(/V#/g, "V*#");
+}
+
+function equationFragments(value: string) {
+  const text = canonical(value)
+    .replace(/(?:^|\s)\*?[a-z]\)\s*/gim, " | ")
+    .replace(/[;\n]+/g, " | ");
+  return text.split("|")
+    .map((part) => part.trim())
+    .filter((part) => part.includes("=") && !/^g\s*=\s*(?:in|n|z|q|r|ℕ|ℤ|ℚ|ℝ)\b/i.test(part))
+    .map((part) => {
+      const eqIndex = part.indexOf("=");
+      // Keep only a compact mathematical neighbourhood. This avoids prose before an equation
+      // from dominating the structural signature while preserving both sides of the equation.
+      const left = part.slice(Math.max(0, eqIndex - 48), eqIndex);
+      const right = part.slice(eqIndex + 1, eqIndex + 49);
+      return `${left}=${right}`.trim();
+    });
+}
+
+function mathFingerprint(value: string): MathFingerprint {
+  const text = canonical(value);
+  const context = hasContextSignals(text);
+  const equations = equationFragments(text);
+  const goals: string[] = [];
+  const actions: string[] = [];
+  const representations: string[] = [];
+
+  const mentionsSolutionSet = /l(?:ö|oe)sungsmenge/.test(text);
+  const mentionsDomain = /grundmenge/.test(text) || /\bg\s*=\s*(?:in|n|z|q|r|ℕ|ℤ|ℚ|ℝ)\b/i.test(text);
+  const asksSolve = /(?:l(?:ö|oe)se|umformen?|forme[^.!?]{0,35}um)/.test(text) || mentionsSolutionSet;
+  const linearEquations = equations.length > 0 && equations.every((eq) => !/\^\s*[2-9]|v\s*\*\s*v/i.test(normalizeEquationShape(eq)));
+
+  if (asksSolve && linearEquations) { goals.push("solve_linear_equation"); actions.push("solve"); representations.push("symbolic"); }
+  if (mentionsSolutionSet) { goals.push("solution_set"); actions.push("determine_set"); }
+  if (mentionsDomain) goals.push("domain_restriction");
+
+  const explains = /\b(?:erkl(?:ä|ae)re|beschreibe|mit eigenen worten)\b/.test(text);
+  if (explains) { goals.push("explain_procedure"); actions.push("explain"); }
+
+  const verifies = /\b(?:überprüfe|ueberpruefe|prüfe|pruefe)\b/.test(text) && /\b(?:aussage|richtig|richtigkeit|begr(?:ü|ue)nde)\b/.test(text);
+  if (verifies) { goals.push("verify_statement"); actions.push("verify"); }
+
+  const termBuild = /(?:dr(?:ü|ue)cke|formuliere|stelle|stell)[^.!?\n]{0,100}\bterm\b/.test(text) || /\bgib[^.!?\n]{0,80}\beinen term\b/.test(text);
+  if (termBuild && context) { goals.push("context_to_term"); actions.push("form_term", "model"); representations.push("context"); }
+  else if (termBuild) { goals.push("verbal_to_term"); actions.push("form_term"); representations.push("verbal"); }
+
+  if (/\b(?:fasse|vereinfache)[^.!?\n]{0,60}(?:term|zusammen)/.test(text)) { goals.push("simplify_term"); actions.push("simplify"); representations.push("symbolic"); }
+
+  if (context && (/(?:gleichung|gleichung:)/.test(text) || (equations.length > 0 && /\bwie\b/.test(text)))) {
+    goals.push("context_equation"); actions.push("model", "solve"); representations.push("context");
+  }
+
+  if (/\b(?:quadrat|rechteck|dreieck|umfang|fl(?:ä|ae)cheninhalt|seitenl(?:ä|ae)nge)\b/.test(text) && /\b(?:berechne|bestimme|ermittle|wie (?:wächst|waechst))\b/.test(text)) {
+    goals.push("geometry_calculation"); actions.push("calculate"); representations.push(context ? "context" : "symbolic");
+  }
+
+  if (context) representations.push("context");
+  if (equations.length) representations.push("symbolic");
+
+  const equationShapes = equations.map(normalizeEquationShape).filter(Boolean);
+  const equationOperators = unique(equationShapes.flatMap((shape) => Array.from(shape.matchAll(/=|\+|-|\*|\/|\^|\(|\)/g)).map((m) => m[0])));
+
+  return {
+    goals: unique(goals),
+    actions: unique(actions),
+    representations: unique(representations),
+    equationShapes,
+    equationOperators,
+    equationCount: equations.length,
+    subtasks: subtaskCount(value),
+  };
+}
+
+function averageBestDice(a: string[], b: string[]) {
+  if (!a.length || !b.length) return 0;
+  const scoreOneWay = (left: string[], right: string[]) => left.reduce((sum, item) => sum + Math.max(...right.map((other) => dice(item, other))), 0) / left.length;
+  return (scoreOneWay(a, b) + scoreOneWay(b, a)) / 2;
+}
+
+function structuralComparison(a: string, b: string) {
+  const fa = mathFingerprint(a), fb = mathFingerprint(b);
+  const goalScore = setJaccard(fa.goals, fb.goals);
+  const actionScore = setJaccard(fa.actions, fb.actions);
+  const representationScore = setJaccard(fa.representations, fb.representations);
+  const equationShapeScore = averageBestDice(fa.equationShapes, fb.equationShapes);
+  const operatorScore = setJaccard(fa.equationOperators, fb.equationOperators);
+  const equationCountScore = fa.equationCount && fb.equationCount
+    ? Math.min(fa.equationCount, fb.equationCount) / Math.max(fa.equationCount, fb.equationCount)
+    : fa.equationCount === fb.equationCount ? 1 : 0;
+  const subtaskScore = fa.subtasks && fb.subtasks
+    ? Math.min(fa.subtasks, fb.subtasks) / Math.max(fa.subtasks, fb.subtasks)
+    : fa.subtasks === fb.subtasks ? 1 : 0.4;
+
+  const aExplain = fa.actions.includes("explain");
+  const bExplain = fb.actions.includes("explain");
+  const incompatibleExplanation = aExplain !== bExplain;
+  const verbalVsContextTerm = (fa.goals.includes("verbal_to_term") && fb.goals.includes("context_to_term"))
+    || (fb.goals.includes("verbal_to_term") && fa.goals.includes("context_to_term"));
+
+  let score = 0.38 * goalScore + 0.20 * actionScore + 0.17 * equationShapeScore + 0.10 * operatorScore + 0.07 * representationScore + 0.05 * equationCountScore + 0.03 * subtaskScore;
+
+  // Two tasks that both explicitly ask to solve linear equations AND determine a solution set
+  // are the same core exercise type even if one variant adds a domain restriction or uses
+  // completely different constants. This is the key abstraction that token similarity misses.
+  const sharedSolveSet = fa.goals.includes("solve_linear_equation") && fb.goals.includes("solve_linear_equation")
+    && fa.goals.includes("solution_set") && fb.goals.includes("solution_set");
+  if (sharedSolveSet) score = Math.max(score, 0.78);
+
+  const strongGoalIntersection = fa.goals.filter((goal) => fb.goals.includes(goal) && goal !== "domain_restriction");
+  if (strongGoalIntersection.length && actionScore >= 0.5) score = Math.max(score, 0.58 + 0.10 * Math.min(1, equationShapeScore + operatorScore / 2));
+
+  if (incompatibleExplanation) score = Math.min(score, 0.16);
+  if (verbalVsContextTerm) score = Math.min(score, 0.24);
+
+  const signals: string[] = [];
+  for (const goal of strongGoalIntersection.slice(0, 3)) signals.push(GOAL_LABELS[goal] || goal);
+  for (const action of fa.actions.filter((item) => fb.actions.includes(item)).slice(0, 2)) signals.push(ACTION_LABELS[action] || action);
+  if (equationShapeScore >= 0.55) signals.push("ähnliche algebraische Gleichungsstruktur");
+  else if (fa.equationCount && fb.equationCount) signals.push("beide enthalten algebraische Gleichungen");
+  if (sharedSolveSet && fa.goals.includes("domain_restriction") !== fb.goals.includes("domain_restriction")) signals.push("Grundmenge ist nur in einer Variante Zusatzanforderung");
+  if (representationScore >= 0.65 && fa.representations.length && fb.representations.length) signals.push("gleiche Darstellungsform");
+
+  const confidentSameSkill = !incompatibleExplanation && !verbalVsContextTerm && (
+    sharedSolveSet
+    || (score >= 0.76 && strongGoalIntersection.length > 0 && actionScore >= 0.65)
+  );
+
+  return { score: Math.max(0, Math.min(1, score)), signals: unique(signals), confidentSameSkill, fa, fb };
+}
+
+export function structuralSimilarity(a: string, b: string) {
+  const result = structuralComparison(a, b);
+  return { score: result.score, signals: result.signals, confidentSameSkill: result.confidentSameSkill };
+}
+
 export function similarity(a: string, b: string, titleA = "", titleB = "") {
   const ca = canonical(a), cb = canonical(b);
   if (!ca || !cb) return 0;
@@ -165,55 +355,86 @@ async function allTasksForClass(classLevel: string, cache: Map<string, Awaited<R
 }
 
 function localCandidates(draft: ImportDraft, tasks: Awaited<ReturnType<typeof loadTasks>>) {
-  return tasks.map((task) => ({
-    id: task.id,
-    title: task.title,
-    questionText: task.questionText,
-    classLevel: draft.classLevel,
-    topic: task.topic,
-    competence: task.competence,
-    localScore: similarity(draft.questionText, task.questionText, draft.title, task.title),
-    score: similarity(draft.questionText, task.questionText, draft.title, task.title),
-  } as DuplicateCandidate)).sort((a, b) => (b.localScore || 0) - (a.localScore || 0)).slice(0, MAX_LOCAL_POOL);
+  return tasks.map((task) => {
+    const lexicalScore = similarity(draft.questionText, task.questionText, draft.title, task.title);
+    const structural = structuralComparison(draft.questionText, task.questionText);
+    // Retrieval is no longer a disguised text-similarity percentage. Mathematical structure may
+    // dominate when constants and wording differ, while near-identical text is still preserved.
+    let retrievalScore = Math.max(
+      lexicalScore >= 0.75 ? lexicalScore * 0.92 : 0,
+      0.42 * lexicalScore + 0.58 * structural.score,
+      structural.score,
+    );
+    if (structural.confidentSameSkill) retrievalScore = Math.max(retrievalScore, 0.80);
+
+    const candidate: DuplicateCandidate = {
+      id: task.id,
+      title: task.title,
+      questionText: task.questionText,
+      classLevel: draft.classLevel,
+      topic: task.topic,
+      competence: task.competence,
+      localScore: lexicalScore,
+      structuralScore: structural.score,
+      retrievalScore,
+      retrievalSignals: structural.signals,
+      score: retrievalScore,
+      confidentVariant: structural.confidentSameSkill,
+    };
+
+    if (structural.confidentSameSkill) {
+      candidate.relation = lexicalScore >= 0.90 && structural.score >= 0.82 ? "near_duplicate" : "same_skill";
+      candidate.reason = structural.signals.length
+        ? `Lokale mathematische Strukturanalyse: ${structural.signals.join(" · ")}.`
+        : "Lokale mathematische Strukturanalyse erkennt denselben konkreten Aufgabentyp.";
+    }
+    return candidate;
+  }).sort((a, b) => (b.retrievalScore || 0) - (a.retrievalScore || 0)).slice(0, MAX_LOCAL_POOL);
 }
 
 
 function localComparisonNote(candidates: DuplicateCandidate[], pendingSemantic = false) {
-  const best = [...candidates].sort((a, b) => (b.localScore || b.score || 0) - (a.localScore || a.score || 0))[0];
+  const best = [...candidates].sort((a, b) => (b.retrievalScore ?? b.localScore ?? b.score ?? 0) - (a.retrievalScore ?? a.localScore ?? a.score ?? 0))[0];
   if (!best) return pendingSemantic
     ? "Lokale Vorauswahl abgeschlossen; semantische Prüfung ausstehend."
     : "Vollständig lokal geprüft; keine bestehenden Vergleichsaufgaben gefunden.";
-  const raw = best.localScore ?? best.score ?? 0;
-  const score = Math.round(raw * 100);
+  const raw = best.retrievalScore ?? best.localScore ?? best.score ?? 0;
   if (raw < LOCAL_DISPLAY_THRESHOLD) {
-    return `Vollständig lokal geprüft; kein relevanter ähnlicher Treffer gefunden. Höchster lokaler Rohwert: ${score} %.`;
+    return "Vollständig lokal geprüft; kein relevanter lokaler Vergleichskandidat gefunden.";
   }
-  const target = `„${best.title}“ · ${best.topic} · ${best.competence} (${score} % lokal)`;
+  const signals = best.retrievalSignals?.length ? ` Fachliche Gemeinsamkeiten: ${best.retrievalSignals.slice(0, 3).join(" · ")}.` : "";
+  const target = `„${best.title}“ · ${best.topic} · ${best.competence}`;
+  if (best.confidentVariant) return `Lokale mathematische Strukturanalyse erkennt ${target} als denselben konkreten Aufgabentyp.${signals}`;
   return pendingSemantic
-    ? `Lokale Vorauswahl: relevanter Kandidat ${target}. Semantische Prüfung ausstehend.`
-    : `Vollständig lokal geprüft. Relevanter lokaler Vergleich: ${target}.`;
+    ? `Lokaler Vergleichskandidat: ${target}.${signals} Semantische Prüfung ausstehend.`
+    : `Vollständig lokal geprüft. Vergleichskandidat: ${target}.${signals}`;
 }
 
 function rerankSelection(candidates: DuplicateCandidate[]) {
-  const sorted = [...candidates].sort((a, b) => (b.localScore || 0) - (a.localScore || 0));
-  const best = sorted[0]?.localScore || 0;
+  const sorted = [...candidates].sort((a, b) => (b.retrievalScore ?? b.localScore ?? 0) - (a.retrievalScore ?? a.localScore ?? 0));
+  const bestCandidate = sorted[0];
+  const best = bestCandidate?.retrievalScore ?? bestCandidate?.localScore ?? 0;
 
-  // Near-identical local matches do not need an LLM to tell us that they are near duplicates.
-  // This is both cheaper and more deterministic.
-  if (best >= LOCAL_CONFIDENT_DUPLICATE) {
-    const first = sorted[0];
-    first.relation = "near_duplicate";
-    first.score = Math.max(first.score, best);
-    first.reason ||= "Nahezu identischer Wortlaut bzw. mathematische Struktur (lokaler Vergleich).";
+  // A high-confidence structural match is intentionally resolved locally. This is the main
+  // Free-Tier optimization in v4.4: the LLM is not needed merely to notice that two sets of
+  // linear equations both ask for the solution set, even when all constants differ.
+  if (bestCandidate?.confidentVariant && (bestCandidate.relation === "same_skill" || bestCandidate.relation === "near_duplicate")) {
     return { shouldCallGroq: false, candidates: [] as DuplicateCandidate[] };
   }
 
-  // If even the best local candidate is weak, a semantic rerank would usually spend tokens only
-  // to confirm that there is no duplicate. Keep the local result and skip Groq entirely.
+  if (best >= LOCAL_CONFIDENT_DUPLICATE && bestCandidate) {
+    bestCandidate.relation = "near_duplicate";
+    bestCandidate.score = Math.max(bestCandidate.score, best);
+    bestCandidate.reason ||= "Nahezu identischer Wortlaut bzw. mathematische Struktur (lokaler Vergleich).";
+    return { shouldCallGroq: false, candidates: [] as DuplicateCandidate[] };
+  }
+
+  // Weak candidates remain visible from 18% retrieval strength, but Groq is reserved for cases
+  // where the local engine has enough evidence to justify spending tokens.
   if (best < LOCAL_GROQ_TRIGGER) return { shouldCallGroq: false, candidates: [] as DuplicateCandidate[] };
 
   const selected = sorted
-    .filter((candidate) => (candidate.localScore || 0) >= RERANK_CANDIDATE_FLOOR)
+    .filter((candidate) => (candidate.retrievalScore ?? candidate.localScore ?? 0) >= RERANK_CANDIDATE_FLOOR)
     .slice(0, MAX_RERANK_CANDIDATES);
   return { shouldCallGroq: selected.length > 0, candidates: selected };
 }
