@@ -424,9 +424,15 @@ export default function AdminPage() {
     return [...pool].sort((a, b) => (b.retrievalScore ?? b.localScore ?? b.score ?? 0) - (a.retrievalScore ?? a.localScore ?? a.score ?? 0))[0];
   }
 
-  function localComparisons(draft: ImportDraft) {
+  function localComparisons(draft: ImportDraft, excludeConfirmed = false) {
     const pool = draft.duplicatePool?.length ? draft.duplicatePool : (draft.duplicates || []);
+    const confirmedIds = excludeConfirmed
+      ? new Set((draft.duplicates || [])
+          .filter((candidate) => candidate.relation === "near_duplicate" || candidate.relation === "same_skill")
+          .map((candidate) => candidate.id))
+      : new Set<string>();
     return [...pool]
+      .filter((candidate) => !confirmedIds.has(candidate.id))
       .filter((candidate) => (candidate.retrievalScore ?? candidate.localScore ?? candidate.score ?? 0) >= LOCAL_RELEVANCE_THRESHOLD)
       .sort((a, b) => (b.retrievalScore ?? b.localScore ?? b.score ?? 0) - (a.retrievalScore ?? a.localScore ?? a.score ?? 0))
       .slice(0, 5);
@@ -651,11 +657,11 @@ export default function AdminPage() {
                   <span>{selected.duplicateCheckNote || "Lokaler Vergleich steht noch aus."}</span>
                 </section>
 
-                {(!selected.duplicate || selected.duplicateCheckStatus === "partial") && localComparisons(selected).length > 0 && (
+                {localComparisons(selected, Boolean(selected.duplicate)).length > 0 && (
                   <section className="adminDuplicate adminDuplicateLocal">
-                    <div><FileSearch size={18} /><strong>{selected.duplicateCheckStatus === "partial" ? "Weitere lokale Vergleichskandidaten" : "Lokale Vergleichskandidaten"}</strong></div>
-                    <p className="adminDuplicateReason">Diese Treffer sind lokale Vergleichskandidaten. Die frühere Prozentanzeige wurde entfernt, weil der technische Suchwert keine fachliche Ähnlichkeits-Prozentzahl darstellt. Auch schwächere Treffer bleiben weiterhin sichtbar.</p>
-                    {localComparisons(selected).map((candidate, index) => (
+                    <div><FileSearch size={18} /><strong>{selected.duplicate ? "Weitere lokale Vergleichskandidaten" : selected.duplicateCheckStatus === "partial" ? "Weitere lokale Vergleichskandidaten" : "Lokale Vergleichskandidaten"}</strong></div>
+                    <p className="adminDuplicateReason">Diese Treffer stammen aus der lokalen Kandidatensuche und bleiben unabhängig von der KI-Prüfung sichtbar. Der technische Suchwert wird bewusst nicht als Ähnlichkeits-Prozentzahl angezeigt. Auch schwächere Treffer ab der lokalen Relevanzschwelle bleiben aufklappbar.</p>
+                    {localComparisons(selected, Boolean(selected.duplicate)).map((candidate, index) => (
                       <details key={candidate.id} open={index === 0}>
                         <summary>{localCandidateLevel(candidate)} · {candidate.title} · {candidate.topic} · {candidate.competence}</summary>
                         {candidate.retrievalSignals?.length ? <p className="adminDuplicateReason"><b>Lokale Signale:</b> {candidate.retrievalSignals.join(" · ")}</p> : null}

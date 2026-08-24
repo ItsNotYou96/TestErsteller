@@ -1,3 +1,39 @@
+# v4.7 Validation
+
+## Regression: formale Sprache → Algebra
+
+Getestetes Positivbeispiel:
+- Neu: `Drücke die folgenden Aussagen mit einem Term aus ... Versechsfache die Summe ...`
+- Datenbank: `Stelle/telle eine zum Text passende Gleichung ... Eine unbekannte Zahl x wird mit 2 multipliziert ...`
+- Ergebnis der strukturellen lokalen Analyse: **0,76 Retrieval-Struktursignal**
+- Signale: `formale sprachliche Beschreibung in Algebra übersetzen`, `gleiche Repräsentationshandlung: Text in Algebra übersetzen`, `gleiche Darstellungsform`
+- Damit ist der Kandidat deutlich oberhalb der Groq-/Anzeige-Schwellen und kann nicht mehr allein wegen `Term` vs. `Gleichung` aus der Kandidatenauswahl fallen.
+
+Dasselbe Ergebnis wird erzielt, wenn der Operator in der Bestandsaufgabe als `telle ... passende Gleichung` vorliegt.
+
+Negativkontrolle:
+- Sprachliche Termbildung vs. Johannisbeer-Sachmodellierung
+- strukturelles Signal ca. **0,178**
+- kein `formal_verbal_to_algebra`-Familienmatch; damit kein künstlicher Boost.
+
+Weitere Regressionen:
+- Gleichungen lösen + Lösungsmenge vs. Variante mit Grundmenge: strukturell **0,78**, lokaler sicherer Aufgabentyp.
+- Nadja/Mutter vs. `Äquivalenzumformung erklären`: **0,16**, kein sicherer Match.
+- Zwei unterschiedlich formulierte sprachliche Termbildungsaufgaben: **0,85**, sicherer Match.
+
+## Adminanzeige
+
+- Lokale Vergleichskandidaten werden auch dann weiter angezeigt, wenn bereits ein KI-bestätigter Treffer existiert.
+- KI-bestätigte Aufgaben werden aus dieser lokalen Zusatzliste herausgefiltert, damit keine Doppelanzeige entsteht.
+- Lokaler Pool: 24 Kandidaten; Anzeige: bis zu 5 nicht bereits bestätigte Kandidaten ab bestehender Relevanzschwelle.
+
+## Technische Prüfung
+
+- Keine neuen npm-Pakete oder Environment-Variablen.
+- 29 ausführbare TS/TSX-Dateien per TypeScript `transpileModule` auf Syntax geprüft: 0 Fehler.
+
+---
+
 # v4.6 Validation
 
 ## Weitere ähnliche Treffer

@@ -1,3 +1,17 @@
+# v4.7 – Repräsentationshandlung in der Ähnlichkeitssuche
+
+Die lokale Kandidatensuche erkennt jetzt zusätzlich die abstrakte **Repräsentationshandlung** einer Aufgabe. Insbesondere werden formal-mathematische Sprachaufgaben wie „Drücke die Aussage mit einem Term aus“ und „Stelle eine zum Text passende Gleichung auf“ gemeinsam als Familie `formale sprachliche Beschreibung → Algebra` erkannt. Der Unterschied `Term` vs. `Gleichung` bleibt erhalten, verhindert aber nicht mehr, dass fachlich eng verwandte Aufgaben in den lokalen Top-Kandidaten landen.
+
+Diese Brücke gilt bewusst **nicht** für reale Sachmodellierungen. Eine Aufgabe wie „Johannisbeeren in 100-g- und 250-g-Schalen – gib einen Term für das Gewicht an“ bleibt in der separaten Familie `Sachkontext → Algebra` und erhält keinen Repräsentations-Boost gegenüber einer rein mathematisch-sprachlichen Termaufgabe.
+
+Die Erkennung ist außerdem toleranter gegenüber kleinen Schreibfehlern im Operator. Neben „Stelle ... Gleichung“ wird z. B. auch eine Formulierung wie „telle eine zum Text passende Gleichung“ über den eindeutigen Ausdruck `zum Text passende Gleichung` korrekt erkannt.
+
+Lokale Vergleichskandidaten bleiben nun **immer sichtbar**, auch wenn Groq bereits einen anderen Treffer als `same_skill`/`near_duplicate` bestätigt hat. Bereits als KI-Treffer angezeigte Aufgaben werden in der lokalen Liste nicht doppelt gezeigt. Der lokale Kandidatenpool wurde von 12 auf 24 erweitert; in der Oberfläche bleiben die fünf relevantesten nicht bereits bestätigten Kandidaten sichtbar und vollständig aufklappbar.
+
+Für Groq wurde die Bewertungsanweisung ergänzt: Das Übersetzen formaler mathematischer Sprache in Algebra kann trotz unterschiedlichem Zielprodukt (Term vs. Gleichung) als eng verwandte Repräsentationsfertigkeit gelten; Sachmodellierung bleibt davon ausdrücklich getrennt.
+
+---
+
 # v4.6 – weitere ähnliche Treffer vollständig aufklappbar
 
 In der Admin-Ähnlichkeitsansicht sind jetzt nicht nur der beste Treffer und die lokalen Vergleichskandidaten vollständig aufklappbar. Auch jeder Eintrag unter **„Weitere ähnliche Treffer“** besitzt einen eigenen Aufklapper. Darin werden der vollständige bestehende Aufgabentext mit KaTeX/LaTeX-Rendering, die Groq-Begründung und – sofern vorhanden – die Kriterienmatrix der semantischen Prüfung angezeigt.

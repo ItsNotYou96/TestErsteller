@@ -20,7 +20,7 @@ const LOCAL_GROQ_TRIGGER = 0.34;
 const LOCAL_CONFIDENT_DUPLICATE = 0.96;
 const RERANK_CANDIDATE_FLOOR = 0.18;
 const MAX_RERANK_CANDIDATES = 3;
-const MAX_LOCAL_POOL = 12;
+const MAX_LOCAL_POOL = 24;
 const LOCAL_DISPLAY_THRESHOLD = 0.18;
 
 export type DuplicateRateLimitInfo = {
@@ -134,6 +134,7 @@ type MathFingerprint = {
   goals: string[];
   actions: string[];
   representations: string[];
+  transformationFamilies: string[];
   equationShapes: string[];
   equationOperators: string[];
   equationCount: number;
@@ -151,12 +152,20 @@ const GOAL_LABELS: Record<string, string> = {
   verify_statement: "Aussagen prüfen und begründen",
   geometry_calculation: "geometrische Größen berechnen",
   context_equation: "Sachkontext mit einer Gleichung modellieren",
+  verbal_to_equation: "sprachliche mathematische Beschreibung in eine Gleichung übersetzen",
+};
+
+const FAMILY_LABELS: Record<string, string> = {
+  formal_verbal_to_algebra: "formale sprachliche Beschreibung in Algebra übersetzen",
+  context_to_algebra: "Sachkontext algebraisch modellieren",
 };
 
 const ACTION_LABELS: Record<string, string> = {
   solve: "gleiche Schülerhandlung: lösen",
   determine_set: "gleiche Schülerhandlung: Lösungsmenge angeben",
   form_term: "gleiche Schülerhandlung: Term bilden",
+  form_equation: "gleiche Schülerhandlung: Gleichung bilden",
+  translate_algebra: "gleiche Repräsentationshandlung: Text in Algebra übersetzen",
   simplify: "gleiche Schülerhandlung: vereinfachen",
   explain: "gleiche Schülerhandlung: erklären",
   verify: "gleiche Schülerhandlung: prüfen/begründen",
@@ -210,6 +219,7 @@ function mathFingerprint(value: string): MathFingerprint {
   const goals: string[] = [];
   const actions: string[] = [];
   const representations: string[] = [];
+  const transformationFamilies: string[] = [];
 
   const mentionsSolutionSet = /l(?:ö|oe)sungsmenge/.test(text);
   const mentionsDomain = /grundmenge/.test(text) || /\bg\s*=\s*(?:in|n|z|q|r|ℕ|ℤ|ℚ|ℝ)\b/i.test(text);
@@ -226,9 +236,24 @@ function mathFingerprint(value: string): MathFingerprint {
   const verifies = /\b(?:überprüfe|ueberpruefe|prüfe|pruefe)\b/.test(text) && /\b(?:aussage|richtig|richtigkeit|begr(?:ü|ue)nde)\b/.test(text);
   if (verifies) { goals.push("verify_statement"); actions.push("verify"); }
 
-  const termBuild = /(?:dr(?:ü|ue)cke|formuliere|stelle|stell)[^.!?\n]{0,100}\bterm\b/.test(text) || /\bgib[^.!?\n]{0,80}\beinen term\b/.test(text);
-  if (termBuild && context) { goals.push("context_to_term"); actions.push("form_term", "model"); representations.push("context"); }
-  else if (termBuild) { goals.push("verbal_to_term"); actions.push("form_term"); representations.push("verbal"); }
+  const termBuild = /(?:dr(?:ü|ue)cke|formuliere|s?tell(?:e|t|en)?|aufstell(?:e|en)?|gib)[^.!?\n]{0,100}\bterm\b/.test(text)
+    || /\bgib[^.!?\n]{0,80}\beinen term\b/.test(text)
+    || /\b(?:passenden?|passende)\s+term\b/.test(text);
+  const equationBuild = (
+    /(?:s?tell(?:e|t|en)?|aufstell(?:e|en)?|formuliere|dr(?:ü|ue)cke|gib)[^.!?\n]{0,110}\bgleichung\b/.test(text)
+    || /\b(?:zum|aus dem)\s+text[^.!?\n]{0,70}\bpassende[nr]?\s+gleichung\b/.test(text)
+    || /\bpassende[nr]?\s+gleichung\b/.test(text)
+  ) && !/(?:l(?:ö|oe)se|umformen?|forme[^.!?]{0,35}um)[^.!?\n]{0,80}\bgleichung/.test(text);
+  if (termBuild && context) {
+    goals.push("context_to_term"); actions.push("form_term", "model"); representations.push("context"); transformationFamilies.push("context_to_algebra");
+  } else if (termBuild) {
+    goals.push("verbal_to_term"); actions.push("form_term", "translate_algebra"); representations.push("verbal"); transformationFamilies.push("formal_verbal_to_algebra");
+  }
+  if (equationBuild && context) {
+    goals.push("context_equation"); actions.push("form_equation", "model"); representations.push("context"); transformationFamilies.push("context_to_algebra");
+  } else if (equationBuild) {
+    goals.push("verbal_to_equation"); actions.push("form_equation", "translate_algebra"); representations.push("verbal"); transformationFamilies.push("formal_verbal_to_algebra");
+  }
 
   if (/\b(?:fasse|vereinfache)[^.!?\n]{0,60}(?:term|zusammen)/.test(text)) { goals.push("simplify_term"); actions.push("simplify"); representations.push("symbolic"); }
 
@@ -250,6 +275,7 @@ function mathFingerprint(value: string): MathFingerprint {
     goals: unique(goals),
     actions: unique(actions),
     representations: unique(representations),
+    transformationFamilies: unique(transformationFamilies),
     equationShapes,
     equationOperators,
     equationCount: equations.length,
@@ -268,6 +294,7 @@ function structuralComparison(a: string, b: string) {
   const goalScore = setJaccard(fa.goals, fb.goals);
   const actionScore = setJaccard(fa.actions, fb.actions);
   const representationScore = setJaccard(fa.representations, fb.representations);
+  const familyScore = setJaccard(fa.transformationFamilies, fb.transformationFamilies);
   const equationShapeScore = averageBestDice(fa.equationShapes, fb.equationShapes);
   const operatorScore = setJaccard(fa.equationOperators, fb.equationOperators);
   const equationCountScore = fa.equationCount && fb.equationCount
@@ -282,8 +309,12 @@ function structuralComparison(a: string, b: string) {
   const incompatibleExplanation = aExplain !== bExplain;
   const verbalVsContextTerm = (fa.goals.includes("verbal_to_term") && fb.goals.includes("context_to_term"))
     || (fb.goals.includes("verbal_to_term") && fa.goals.includes("context_to_term"));
+  const sharedFormalVerbalAlgebra = fa.transformationFamilies.includes("formal_verbal_to_algebra")
+    && fb.transformationFamilies.includes("formal_verbal_to_algebra");
+  const contextVsFormalAlgebra = (fa.transformationFamilies.includes("formal_verbal_to_algebra") && fb.transformationFamilies.includes("context_to_algebra"))
+    || (fb.transformationFamilies.includes("formal_verbal_to_algebra") && fa.transformationFamilies.includes("context_to_algebra"));
 
-  let score = 0.38 * goalScore + 0.20 * actionScore + 0.17 * equationShapeScore + 0.10 * operatorScore + 0.07 * representationScore + 0.05 * equationCountScore + 0.03 * subtaskScore;
+  let score = 0.35 * goalScore + 0.18 * actionScore + 0.14 * familyScore + 0.15 * equationShapeScore + 0.08 * operatorScore + 0.05 * representationScore + 0.03 * equationCountScore + 0.02 * subtaskScore;
 
   // Two tasks that both explicitly ask to solve linear equations AND determine a solution set
   // are the same core exercise type even if one variant adds a domain restriction or uses
@@ -295,18 +326,28 @@ function structuralComparison(a: string, b: string) {
   const strongGoalIntersection = fa.goals.filter((goal) => fb.goals.includes(goal) && goal !== "domain_restriction");
   if (strongGoalIntersection.length && actionScore >= 0.5) score = Math.max(score, 0.58 + 0.10 * Math.min(1, equationShapeScore + operatorScore / 2));
 
+  // "Term aus einer mathematisch-sprachlichen Beschreibung bilden" and "Gleichung aus einer
+  // mathematisch-sprachlichen Beschreibung bilden" are not identical output formats, but they
+  // train the same representation process: verbal mathematical relations -> algebra.  This
+  // bridge is deliberately limited to FORMAL verbal descriptions.  Real-world modelling tasks
+  // (prices, ages, weights, ...) use a different family and receive no such boost.
+  if (sharedFormalVerbalAlgebra) {
+    score = Math.max(score, 0.68 + 0.08 * Math.min(1, representationScore + actionScore / 2));
+  }
+
   if (incompatibleExplanation) score = Math.min(score, 0.16);
-  if (verbalVsContextTerm) score = Math.min(score, 0.24);
+  if (verbalVsContextTerm || contextVsFormalAlgebra) score = Math.min(score, 0.24);
 
   const signals: string[] = [];
   for (const goal of strongGoalIntersection.slice(0, 3)) signals.push(GOAL_LABELS[goal] || goal);
+  for (const family of fa.transformationFamilies.filter((item) => fb.transformationFamilies.includes(item)).slice(0, 2)) signals.push(FAMILY_LABELS[family] || family);
   for (const action of fa.actions.filter((item) => fb.actions.includes(item)).slice(0, 2)) signals.push(ACTION_LABELS[action] || action);
   if (equationShapeScore >= 0.55) signals.push("ähnliche algebraische Gleichungsstruktur");
   else if (fa.equationCount && fb.equationCount) signals.push("beide enthalten algebraische Gleichungen");
   if (sharedSolveSet && fa.goals.includes("domain_restriction") !== fb.goals.includes("domain_restriction")) signals.push("Grundmenge ist nur in einer Variante Zusatzanforderung");
   if (representationScore >= 0.65 && fa.representations.length && fb.representations.length) signals.push("gleiche Darstellungsform");
 
-  const confidentSameSkill = !incompatibleExplanation && !verbalVsContextTerm && (
+  const confidentSameSkill = !incompatibleExplanation && !verbalVsContextTerm && !contextVsFormalAlgebra && (
     sharedSolveSet
     || (score >= 0.76 && strongGoalIntersection.length > 0 && actionScore >= 0.65)
   );
@@ -469,7 +510,7 @@ async function rerankWithGroq(draft: ImportDraft, candidates: DuplicateCandidate
   const rerankCandidates = selection.candidates;
   const prompt = `Vergleiche EINE neue Mathematikaufgabe mit bestehenden Aufgaben. Entscheide didaktisch, ob es praktisch dieselbe Aufgabe/Variante ist, nur dieselbe mathematische Fertigkeit prüft, lediglich thematisch verwandt ist oder nicht verwandt ist.
 
-Bewerte NICHT nach identischen Zahlen allein. Andere Zahlen bei ansonsten gleicher mathematischer Handlung und Struktur können eine near_duplicate-Variante sein. Ein gemeinsames Oberthema (z. B. „Gleichungen“ oder „Terme“) reicht ausdrücklich NICHT. Entscheidend sind die konkrete Schülerhandlung, der Lösungsweg und die Aufgabenstruktur. Eine Erklär-/Begründungsaufgabe ist nicht ähnlich zu einer Anwendungs-/Sachaufgabe nur weil beide dasselbe Thema betreffen. Es ist ausdrücklich erlaubt, ALLE Kandidaten als not_related zu markieren. Erzwinge keinen Treffer. Gib für jeden Kandidaten eine score zwischen 0 und 1 und eine sehr kurze Begründung. Verwende ausschließlich die gelieferten candidateId-Werte.
+Bewerte NICHT nach identischen Zahlen allein. Andere Zahlen bei ansonsten gleicher mathematischer Handlung und Struktur können eine near_duplicate-Variante sein. Ein gemeinsames Oberthema (z. B. „Gleichungen“ oder „Terme“) reicht ausdrücklich NICHT. Entscheidend sind die konkrete Schülerhandlung, der Lösungsweg und die Aufgabenstruktur. Das Übersetzen einer FORMALEN mathematisch-sprachlichen Beschreibung in Algebra kann auch dann derselben engeren Repräsentationsfertigkeit angehören, wenn eine Variante einen Term und die andere eine Gleichung verlangt; unterscheide das aber klar von einer realen Sachsituation, die erst modelliert werden muss. Eine Erklär-/Begründungsaufgabe ist nicht ähnlich zu einer Anwendungs-/Sachaufgabe nur weil beide dasselbe Thema betreffen. Es ist ausdrücklich erlaubt, ALLE Kandidaten als not_related zu markieren. Erzwinge keinen Treffer. Gib für jeden Kandidaten eine score zwischen 0 und 1 und eine sehr kurze Begründung. Verwende ausschließlich die gelieferten candidateId-Werte.
 
 NEUE AUFGABE:
 Titel: ${draft.title}
@@ -632,7 +673,7 @@ async function requestDuplicateBatch(
     `- same_skill: gleicher konkreter Aufgabentyp und dieselbe mathematische Fertigkeit; als Übungsvarianten sinnvoll austauschbar.\n` +
     `- related: nur thematisch/fachlich verwandt, aber anderer Aufgabentyp oder andere Schülerhandlung.\n` +
     `- not_related: keine relevante Ähnlichkeit.\n\n` +
-    `Gleiche Oberbegriffe reichen NICHT. Eine Erklär-/Begründungsaufgabe ist nicht ähnlich zu einer Sach-/Anwendungsaufgabe nur wegen desselben Themas. Eine Sachmodellierung ist nicht automatisch ähnlich zu einer rein algebraischen Aufgabe, nur weil beide am Ende einen Term oder eine Gleichung verwenden. Es ist ausdrücklich erlaubt, alle Kandidaten als not_related zu markieren. Erzwinge keinen Treffer.\n` +
+    `Gleiche Oberbegriffe reichen NICHT. Das Übersetzen einer FORMALEN mathematisch-sprachlichen Beschreibung in Algebra kann trotz unterschiedlichem Zielprodukt (Term vs. Gleichung) dieselbe eng verwandte Repräsentationsfertigkeit prüfen; das ist ausdrücklich anders als eine reale Sachsituation, die erst mathematisch modelliert werden muss. Eine Erklär-/Begründungsaufgabe ist nicht ähnlich zu einer Sach-/Anwendungsaufgabe nur wegen desselben Themas. Eine Sachmodellierung ist nicht automatisch ähnlich zu einer rein algebraischen Aufgabe, nur weil beide am Ende einen Term oder eine Gleichung verwenden. Es ist ausdrücklich erlaubt, alle Kandidaten als not_related zu markieren. Erzwinge keinen Treffer.\n` +
     `Gib JEDE gelieferte Kandidatenposition genau einmal zurück. reason maximal 18 Wörter. Verwende nur taskIndex und candidateIndex aus der Eingabe.`;
 
   const tasksText = active.map(({ draft, selected }, taskIndex) => `TASK taskIndex=${taskIndex}\nNEUE AUFGABE:\nTitel: ${draft.title}\n${draft.questionText.slice(0, 900)}\n\nKANDIDATEN:\n${selected.map((candidate, candidateIndex) => `candidateIndex=${candidateIndex}\nTitel: ${candidate.title}\nThema: ${candidate.topic}; Kompetenz: ${candidate.competence}\n${candidate.questionText.slice(0, 420)}`).join("\n\n")}`).join("\n\n---\n\n");
