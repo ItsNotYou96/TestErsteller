@@ -1,6 +1,6 @@
 import type { Competence } from "./types";
 
-export const LOCAL_RELEVANCE_THRESHOLD = 0.50; // UI fallback only; v4 retrieval uses explicit evidence flags.
+export const LOCAL_RELEVANCE_THRESHOLD = 0.18; // Show weak local retrieval candidates too; this is a search threshold, not confirmed similarity.
 
 export interface SimilarityRubric {
   sameLearningGoal: boolean;

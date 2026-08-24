@@ -10,6 +10,11 @@ import { parsePointsSpec } from "@/lib/taskParsing";
 
 const competences: Competence[] = ["Argumentieren", "Problemlösen", "Modellieren", "Darstellungen", "Mathematik", "Kommunizieren"];
 
+// Short Groq throttles are worth waiting out. A reset measured in many minutes is not:
+// the admin should remain usable with heuristic metadata and local duplicate candidates.
+const MAX_AUTO_GROQ_WAIT_SECONDS = 60;
+const MAX_SHORT_RATE_LIMIT_RETRIES = 2;
+
 type ImportHistoryEntry = {
   at: string;
   files: string[];
@@ -190,6 +195,7 @@ export default function AdminPage() {
           working = working.map((draft, index) => index === i ? { ...draft, mathRepair: "checking", mathRepairNote: "Mathematische Anordnung wird im PDF-Bild nachgelesen …" } : draft);
           setDrafts([...working]);
 
+          let mathRateLimitRetries = 0;
           while (true) {
             setMessage(`Mathematik ${queueIndex + 1}/${repairIndexes.length}: ${working[i].title}`);
             const repairForm = new FormData();
@@ -212,9 +218,17 @@ export default function AdminPage() {
 
             if (rr.status === 429) {
               const retrySeconds = Math.max(2, Number(result.retryAfterSeconds) || parseResetSeconds(result.resetTokens) || 8);
-              working = working.map((draft, index) => index === i ? { ...draft, mathRepair: "needed", mathRepairNote: `Groq-Limit erreicht; Fortsetzung in ${Math.ceil(retrySeconds)} s.` } : draft);
+              if (retrySeconds > MAX_AUTO_GROQ_WAIT_SECONDS || mathRateLimitRetries >= MAX_SHORT_RATE_LIMIT_RETRIES) {
+                const note = `Groq-Limit: visuelle Mathekorrektur für diesen Import übersprungen (Reset in ca. ${Math.ceil(retrySeconds)} s).`;
+                working = working.map((draft, index) => index === i ? { ...draft, mathRepair: "rejected", mathRepairNote: note } : draft);
+                setDrafts([...working]);
+                mathWarnings.push(`${working[i].title}: ${note}`);
+                break;
+              }
+              mathRateLimitRetries += 1;
+              working = working.map((draft, index) => index === i ? { ...draft, mathRepair: "needed", mathRepairNote: `Groq-Limit erreicht; kurzer Retry in ${Math.ceil(retrySeconds)} s.` } : draft);
               setDrafts([...working]);
-              setMessage(`Mathematik ${queueIndex + 1}/${repairIndexes.length}: Groq-Limit erreicht · Fortsetzung in ${Math.ceil(retrySeconds)} s …`);
+              setMessage(`Mathematik ${queueIndex + 1}/${repairIndexes.length}: Groq-Limit erreicht · kurzer Retry in ${Math.ceil(retrySeconds)} s …`);
               await sleep((retrySeconds + 0.5) * 1000);
               working = working.map((draft, index) => index === i ? { ...draft, mathRepair: "checking", mathRepairNote: "Mathematische Anordnung wird im PDF-Bild nachgelesen …" } : draft);
               setDrafts([...working]);
@@ -233,7 +247,9 @@ export default function AdminPage() {
 
       if (data.llmRequested && working.length) {
         const llmWarnings: string[] = [];
+        let stopMetadataGroq = false;
         for (let i = 0; i < working.length; i++) {
+          if (stopMetadataGroq) break;
           setMessage(`Metadaten ${i + 1}/${working.length}: ${working[i].title}`);
           let completed = false;
           for (let attempt = 0; attempt < 4 && !completed; attempt++) {
@@ -251,7 +267,14 @@ export default function AdminPage() {
             }
             if (rr.status === 429) {
               const retrySeconds = Math.max(2, Number(result.retryAfterSeconds) || parseResetSeconds(result.resetTokens) || 8);
-              setMessage(`Metadaten ${i + 1}/${working.length}: Groq-Limit erreicht · Fortsetzung automatisch in ${Math.ceil(retrySeconds)} s …`);
+              if (retrySeconds > MAX_AUTO_GROQ_WAIT_SECONDS || attempt >= MAX_SHORT_RATE_LIMIT_RETRIES) {
+                stopMetadataGroq = true;
+                completed = true; // Heuristische Werte dieser und der restlichen Aufgaben behalten.
+                llmWarnings.push(`Groq-Metadatenlimit erreicht (Reset in ca. ${Math.ceil(retrySeconds)} s). Weitere Metadaten werden für diesen Import heuristisch belassen; es wird nicht minutenlang gewartet.`);
+                setMessage(`Groq-Metadatenlimit erreicht · kein Warten auf ${Math.ceil(retrySeconds)} s · Import läuft lokal weiter …`);
+                break;
+              }
+              setMessage(`Metadaten ${i + 1}/${working.length}: Groq-Limit erreicht · kurzer Retry in ${Math.ceil(retrySeconds)} s …`);
               await sleep((retrySeconds + 0.5) * 1000);
               continue;
             }
@@ -272,7 +295,9 @@ export default function AdminPage() {
         const batches: string[][] = [];
         for (let offset = 0; offset < pendingIds.length; offset += 4) batches.push(pendingIds.slice(offset, offset + 4));
 
+        let stopDuplicateGroq = false;
         for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+          if (stopDuplicateGroq) break;
           const ids = new Set(batches[batchIndex]);
           working = working.map((draft) => ids.has(draft.id) ? {
             ...draft,
@@ -281,6 +306,7 @@ export default function AdminPage() {
           } : draft);
           setDrafts([...working]);
 
+          let duplicateRateLimitRetries = 0;
           while (true) {
             const batchDrafts = working.filter((draft) => ids.has(draft.id));
             setMessage(`Ähnlichkeit: Paket ${batchIndex + 1}/${batches.length} · ${batchDrafts.length} Aufgabe${batchDrafts.length === 1 ? "" : "n"}`);
@@ -300,18 +326,33 @@ export default function AdminPage() {
 
             if (rr.status === 429) {
               const retrySeconds = Math.max(2, Number(result.retryAfterSeconds) || parseResetSeconds(result.resetTokens) || 8);
+              if (retrySeconds > MAX_AUTO_GROQ_WAIT_SECONDS || duplicateRateLimitRetries >= MAX_SHORT_RATE_LIMIT_RETRIES) {
+                const remainingIds = new Set(batches.slice(batchIndex).flat());
+                working = working.map((draft) => remainingIds.has(draft.id) ? {
+                  ...draft,
+                  duplicateNeedsRerank: false,
+                  duplicateCheckStatus: "local",
+                  duplicateCheckNote: `Lokal vollständig geprüft. Semantische Groq-Prüfung für diesen Import übersprungen (Reset in ca. ${Math.ceil(retrySeconds)} s). Lokale Vergleichskandidaten bleiben sichtbar.`,
+                } : draft);
+                setDrafts([...working]);
+                duplicateWarnings.push(`Groq-Limit mit ca. ${Math.ceil(retrySeconds)} s Wartezeit; restliche Ähnlichkeitsprüfungen bleiben lokal.`);
+                setMessage(`Groq-Ähnlichkeitslimit erreicht · kein Warten auf ${Math.ceil(retrySeconds)} s · lokale Kandidaten werden verwendet …`);
+                stopDuplicateGroq = true;
+                break;
+              }
+              duplicateRateLimitRetries += 1;
               working = working.map((draft) => ids.has(draft.id) ? {
                 ...draft,
                 duplicateCheckStatus: "pending",
-                duplicateCheckNote: `Groq-Limit erreicht; automatische Fortsetzung in ${Math.ceil(retrySeconds)} s.`,
+                duplicateCheckNote: `Lokal geprüft; Groq-Limit erreicht. Kurzer Retry in ${Math.ceil(retrySeconds)} s.`,
               } : draft);
               setDrafts([...working]);
-              setMessage(`Ähnlichkeit: Groq-Limit erreicht · Paket ${batchIndex + 1}/${batches.length} läuft in ${Math.ceil(retrySeconds)} s weiter …`);
+              setMessage(`Ähnlichkeit: Groq-Limit erreicht · kurzer Retry in ${Math.ceil(retrySeconds)} s …`);
               await sleep((retrySeconds + 0.5) * 1000);
               working = working.map((draft) => ids.has(draft.id) ? {
                 ...draft,
                 duplicateCheckStatus: "checking",
-                duplicateCheckNote: "Semantische Ähnlichkeitsprüfung läuft …",
+                duplicateCheckNote: "Lokale Kandidaten vorhanden; semantische Ähnlichkeitsprüfung läuft …",
               } : draft);
               setDrafts([...working]);
               continue;
@@ -328,13 +369,14 @@ export default function AdminPage() {
             break;
           }
         }
-        if (duplicateWarnings.length) setWarnings((prev) => [...prev, `Ähnlichkeitsprüfung fehlgeschlagen: ${duplicateWarnings.join(" | ")}`]);
+        if (duplicateWarnings.length) setWarnings((prev) => [...prev, `Hinweise zur Ähnlichkeitsprüfung: ${duplicateWarnings.join(" | ")}`]);
       }
 
       const llmCount = working.filter((x) => x.analysisMode === "llm").length;
       const duplicateChecked = working.filter((x) => x.duplicateCheckStatus === "local" || x.duplicateCheckStatus === "groq").length;
       const duplicateFailed = working.filter((x) => x.duplicateCheckStatus === "failed").length;
-      setMessage(`${working.length} Aufgaben erkannt${data.llmRequested ? ` · ${llmCount} Metadaten per Groq verfeinert` : ""} · Ähnlichkeit ${duplicateChecked}/${working.length} geprüft${duplicateFailed ? ` · ${duplicateFailed} fehlgeschlagen` : ""}. Bitte Vorschläge prüfen.`);
+      const heuristicCount = working.length - llmCount;
+      setMessage(`${working.length} Aufgaben erkannt${data.llmRequested ? ` · ${llmCount} Metadaten per Groq verfeinert${heuristicCount ? ` · ${heuristicCount} heuristisch` : ""}` : ""} · Ähnlichkeit ${duplicateChecked}/${working.length} geprüft${duplicateFailed ? ` · ${duplicateFailed} fehlgeschlagen` : ""}. Bitte Vorschläge prüfen.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   }
@@ -382,18 +424,28 @@ export default function AdminPage() {
     return [...pool].sort((a, b) => (b.retrievalScore ?? b.localScore ?? b.score ?? 0) - (a.retrievalScore ?? a.localScore ?? a.score ?? 0))[0];
   }
 
+  function localComparisons(draft: ImportDraft) {
+    const pool = draft.duplicatePool?.length ? draft.duplicatePool : (draft.duplicates || []);
+    return [...pool]
+      .filter((candidate) => (candidate.retrievalScore ?? candidate.localScore ?? candidate.score ?? 0) >= LOCAL_RELEVANCE_THRESHOLD)
+      .sort((a, b) => (b.retrievalScore ?? b.localScore ?? b.score ?? 0) - (a.retrievalScore ?? a.localScore ?? a.score ?? 0))
+      .slice(0, 5);
+  }
+
   function relevantLocalComparison(draft: ImportDraft) {
-    const candidate = bestLocalComparison(draft);
-    if (!candidate) return undefined;
-    return candidate.retrievalEligible || candidate.relation === "near_duplicate" || (candidate.retrievalScore ?? candidate.localScore ?? candidate.score ?? 0) >= LOCAL_RELEVANCE_THRESHOLD ? candidate : undefined;
+    return localComparisons(draft)[0];
+  }
+
+  function localCandidatePercent(candidate: NonNullable<ImportDraft["duplicate"]>) {
+    return Math.round((candidate.retrievalScore ?? candidate.localScore ?? candidate.score ?? 0) * 100);
   }
 
   function duplicateStatusLabel(draft: ImportDraft) {
     if (draft.duplicateCheckStatus === "groq") return "Ähnlichkeit: KI ✓";
-    if (draft.duplicateCheckStatus === "local") return relevantLocalComparison(draft) ? "Ähnlichkeit: lokal ✓" : "Lokal geprüft ✓";
-    if (draft.duplicateCheckStatus === "checking") return "Ähnlichkeit: prüft …";
-    if (draft.duplicateCheckStatus === "failed") return "Ähnlichkeit: Fehler";
-    return "Ähnlichkeit: wartet";
+    if (draft.duplicateCheckStatus === "local") return "Lokal geprüft ✓";
+    if (draft.duplicateCheckStatus === "checking") return "Lokal geprüft · KI prüft …";
+    if (draft.duplicateCheckStatus === "failed") return "Lokal geprüft · KI-Fehler";
+    return "Lokal geprüft · KI wartet";
   }
 
   function patchDraft(id: string, patch: Partial<ImportDraft>) {
@@ -559,7 +611,7 @@ export default function AdminPage() {
               {drafts.map((draft, index) => (
                 <button key={draft.id} className={`adminDraftCard ${selected?.id === draft.id ? "active" : ""} ${!draft.include ? "excluded" : ""}`} onClick={() => setSelectedId(draft.id)}>
                   <span className="adminDraftIndex">{index + 1}</span>
-                  <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P.{draft.pointsSource === "heuristic" ? " (geschätzt)" : ""} · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}{draft.segmentationConfidence ? ` · Struktur ${Math.round(draft.segmentationConfidence * 100)}%` : ""}{draft.mathRepair === "visual" ? " · Mathe visuell korrigiert" : draft.mathRepair === "checking" ? " · Mathe wird geprüft" : draft.mathRepair === "needed" ? " · Mathe-Reparatur wartet" : draft.mathRepair === "rejected" || draft.mathRepair === "failed" ? " · Mathe-Korrektur fehlgeschlagen" : ""}</small>{draft.duplicateCheckStatus === "local" && relevantLocalComparison(draft) && (() => { const candidate = relevantLocalComparison(draft)!; return <small title={`${candidate.title} · ${candidate.topic} · ${candidate.competence}`}>Bester lokaler Kandidat: {candidate.title} · {candidate.topic} · {candidate.competence}{candidate.retrievalSignals?.length ? ` · ${candidate.retrievalSignals.slice(0, 2).join(" · ")}` : ""}</small>; })()}</span>
+                  <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P.{draft.pointsSource === "heuristic" ? " (geschätzt)" : ""} · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}{draft.segmentationConfidence ? ` · Struktur ${Math.round(draft.segmentationConfidence * 100)}%` : ""}{draft.mathRepair === "visual" ? " · Mathe visuell korrigiert" : draft.mathRepair === "checking" ? " · Mathe wird geprüft" : draft.mathRepair === "needed" ? " · Mathe-Reparatur wartet" : draft.mathRepair === "rejected" || draft.mathRepair === "failed" ? " · Mathe-Korrektur fehlgeschlagen" : ""}</small>{draft.duplicateCheckStatus !== "groq" && relevantLocalComparison(draft) && (() => { const candidate = relevantLocalComparison(draft)!; return <small title={`${candidate.title} · ${candidate.topic} · ${candidate.competence}`}>Lokaler Kandidat ({localCandidatePercent(candidate)} % Suchwert): {candidate.title} · {candidate.topic} · {candidate.competence}</small>; })()}</span>
                   <span className="adminDraftBadges">
                     <em className={`duplicateStatus ${draft.duplicateCheckStatus || "pending"}`}>{duplicateStatusLabel(draft)}</em>
                     {draft.duplicate && <em className={draft.duplicate.relation === "near_duplicate" ? "danger" : "warn"}>{duplicateLabel(draft.duplicate.relation)}</em>}
@@ -594,20 +646,19 @@ export default function AdminPage() {
                   <span>{selected.duplicateCheckNote || "Lokaler Vergleich steht noch aus."}</span>
                 </section>
 
-                {selected.duplicateCheckStatus === "local" && !selected.duplicate && relevantLocalComparison(selected) && (() => {
-                  const candidate = relevantLocalComparison(selected)!;
-                  return (
-                    <section className="adminDuplicate adminDuplicateLocal">
-                      <div><CheckCircle2 size={18} /><strong>Lokaler Kandidat</strong></div>
-                      <p><b>Bestehende Aufgabe:</b> {candidate.title} · {candidate.topic} · {candidate.competence}</p>
-                      {candidate.retrievalSignals?.length ? <p className="adminDuplicateReason"><b>Warum ausgewählt:</b> {candidate.retrievalSignals.join(" · ")}</p> : null}
-                      <details>
-                        <summary>Bestehende Aufgabe vergleichen</summary>
+                {!selected.duplicate && localComparisons(selected).length > 0 && (
+                  <section className="adminDuplicate adminDuplicateLocal">
+                    <div><FileSearch size={18} /><strong>Lokale Vergleichskandidaten</strong></div>
+                    <p className="adminDuplicateReason">Diese Treffer sind nur lokale Suchkandidaten, keine bestätigte Ähnlichkeit. Angezeigt werden bis zu fünf Aufgaben ab 18 % Suchwert.</p>
+                    {localComparisons(selected).map((candidate, index) => (
+                      <details key={candidate.id} open={index === 0}>
+                        <summary>{candidate.title} · {candidate.topic} · {candidate.competence} · {localCandidatePercent(candidate)} % Suchwert</summary>
+                        {candidate.retrievalSignals?.length ? <p className="adminDuplicateReason"><b>Lokale Signale:</b> {candidate.retrievalSignals.join(" · ")}</p> : null}
                         <div className="adminExistingQuestion"><LatexText text={candidate.questionText} /></div>
                       </details>
-                    </section>
-                  );
-                })()}
+                    ))}
+                  </section>
+                )}
 
                 {selected.duplicate && (
                   <section className={`adminDuplicate ${selected.duplicate.relation === "near_duplicate" ? "high" : ""}`}>

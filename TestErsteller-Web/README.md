@@ -1,3 +1,13 @@
+# v4.3 – Groq-Limits blockieren den Import nicht mehr
+
+Groq-Rate-Limits werden jetzt bewusst als optionaler Verfeinerungsschritt behandelt. Kurze 429-Wartezeiten (bis 60 Sekunden) werden weiterhin automatisch wiederholt. Meldet Groq jedoch einen langen Reset – z. B. 1201 Sekunden – wartet die Adminseite nicht mehr minutenlang. Die jeweilige KI-Phase wird für diesen Import übersprungen und die bereits vorhandenen heuristischen bzw. lokalen Ergebnisse bleiben vollständig nutzbar. Nach zwei kurzen Rate-Limit-Retries wird ebenfalls lokal weitergearbeitet.
+
+Für die lokale Ähnlichkeitssuche gilt jetzt: **Anzeigen ab 18 % Suchwert, Groq erst ab 34 %.** Dadurch kann die Lehrkraft auch schwächere lokale Kandidaten selbst prüfen, ohne jeden 18–30-%-Treffer teuer an Groq zu schicken. Bis zu fünf lokale Kandidaten werden vollständig aufklappbar angezeigt. Der Prozentwert heißt ausdrücklich **Suchwert** und ist keine bestätigte fachliche Ähnlichkeit.
+
+Wird die semantische Groq-Prüfung wegen eines langen Limits ausgelassen, steht pro Aufgabe weiterhin `Lokal geprüft ✓`; die lokalen Kandidaten bleiben sichtbar. Metadaten, die wegen eines langen Limits nicht per Groq verfeinert werden konnten, bleiben heuristisch und editierbar.
+
+---
+
 # v4.2 – Rückkehr zur bewährten v3.7-Ähnlichkeitssuche
 
 Die Ähnlichkeits-Engine wurde bewusst auf den letzten stabilen Retrieval-Kern aus v3.7 zurückgeführt. Die ab v3.8 eingeführten didaktischen Fingerprints, Profil-Boosts und späteren Hybrid-Gates wurden aus der Kandidatenauswahl entfernt, weil sie grobe thematische Gemeinsamkeiten teilweise höher gewichteten als tatsächlich ähnliche Aufgaben.

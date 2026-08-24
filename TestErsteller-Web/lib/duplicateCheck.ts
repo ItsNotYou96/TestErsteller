@@ -14,13 +14,13 @@ const STOPWORDS = new Set([
 // even when many documents are imported in one session.
 // v4.2 deliberately restores the v3.7 retrieval engine. The later didactic-profile
 // boosts (v3.8-v4.1) caused generic thematic matches to displace genuinely similar tasks.
-// Local similarity is ONLY a retrieval signal; Groq gets borderline candidates and may reject all.
-const LOCAL_GROQ_TRIGGER = 0.22;
+// Local similarity is ONLY a retrieval signal. v4.3 shows candidates from 18%, but only spends Groq tokens when the best local hit reaches 34%.
+const LOCAL_GROQ_TRIGGER = 0.34;
 const LOCAL_CONFIDENT_DUPLICATE = 0.96;
 const RERANK_CANDIDATE_FLOOR = 0.18;
 const MAX_RERANK_CANDIDATES = 5;
 const MAX_LOCAL_POOL = 12;
-const LOCAL_DISPLAY_THRESHOLD = 0.50;
+const LOCAL_DISPLAY_THRESHOLD = 0.18;
 
 export type DuplicateRateLimitInfo = {
   retryAfterSeconds?: number;
@@ -318,9 +318,11 @@ export async function addDuplicateCandidates(drafts: ImportDraft[], options: { l
         ? "Lokale Vorauswahl und semantische Groq-Prüfung abgeschlossen."
         : localComparisonNote(candidates, false);
     }
-    const visible = candidates.filter((candidate) => candidate.score >= (candidate.relation ? 0.45 : 0.42)).slice(0, 5);
+    const visible = candidates.filter((candidate) => candidate.score >= (candidate.relation ? 0.45 : LOCAL_DISPLAY_THRESHOLD)).slice(0, 5);
     draft.duplicates = visible;
-    draft.duplicate = visible[0];
+    // Local retrieval candidates are suggestions only. Treat a task as a confirmed duplicate
+    // only when the local engine is virtually certain or Groq has explicitly classified it.
+    draft.duplicate = visible.find((candidate) => candidate.relation === "near_duplicate" || candidate.relation === "same_skill");
     if (draft.duplicate?.relation === "near_duplicate" && draft.duplicate.score >= 0.97) draft.include = false;
     else if (!draft.duplicate?.relation && (draft.duplicate?.score || 0) >= 0.98) draft.include = false;
   }
@@ -400,7 +402,7 @@ export async function rerankDuplicateCandidatesBatch(inputDrafts: ImportDraft[])
         ...draft,
         duplicatePool: existing.slice(0, MAX_LOCAL_POOL),
         duplicates: visible,
-        duplicate: visible[0],
+        duplicate: visible.find((candidate) => candidate.relation === "near_duplicate" || candidate.relation === "same_skill"),
         duplicateNeedsRerank: false,
         duplicateCheckStatus: "local" as const,
         duplicateCheckNote: localComparisonNote(existing, false),
@@ -464,7 +466,7 @@ export async function rerankDuplicateCandidatesBatch(inputDrafts: ImportDraft[])
         ...draft,
         duplicatePool: existing.slice(0, MAX_LOCAL_POOL),
         duplicates: visible,
-        duplicate: visible[0],
+        duplicate: visible.find((candidate) => candidate.relation === "near_duplicate" || candidate.relation === "same_skill"),
         duplicateNeedsRerank: false,
         duplicateCheckStatus: "local" as const,
         duplicateCheckNote: localComparisonNote(existing, false),
