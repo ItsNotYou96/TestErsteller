@@ -47,9 +47,14 @@ export async function POST(request: NextRequest) {
         for (const draft of drafts) {
           const source = sourceByName.get(draft.sourceFile);
           if (!source || source.mimeType !== "application/pdf" || !draft.sourcePages?.length) continue;
-          if (!likelyBrokenPdfMath(draft.questionText)) { skipped++; continue; }
+          const blockIds = new Set(draft.sourceBlockIds || []);
+          const rawPdfEvidence = source.blocks
+            .filter((block) => blockIds.has(block.id) && block.kind !== "page-break" && block.kind !== "image")
+            .map((block) => block.text)
+            .join("\n");
+          if (!likelyBrokenPdfMath(`${rawPdfEvidence}\n${draft.questionText}`)) { skipped++; continue; }
           try {
-            draft.questionText = await repairTaskMathWithGroq(source.bytes, draft.questionText, draft.sourcePages);
+            draft.questionText = await repairTaskMathWithGroq(source.bytes, draft.questionText, draft.sourcePages, rawPdfEvidence);
             draft.mathRepair = "visual";
             repaired++;
           } catch (error) {

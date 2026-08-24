@@ -1,5 +1,6 @@
 import "pdf-parse/worker";
 import { PDFParse } from "pdf-parse";
+import { likelyBrokenPdfMath } from "./pdfMathSignals";
 
 export function visionOcrConfigured() {
   return Boolean(process.env.GROQ_API_KEY?.trim());
@@ -44,11 +45,26 @@ function numberMultiset(value: string) {
   return Array.from(value.normalize("NFKC").matchAll(/\d+(?:[.,]\d+)?/g)).map((m) => m[0].replace(",", ".")).sort();
 }
 
+function numbersBySubtask(value: string) {
+  const text = value.replace(/\r/g, "");
+  const labels = Array.from(text.matchAll(/(?:^|\n|\s)\*?([a-z])\)\s*/gim));
+  if (!labels.length) return [numberMultiset(text).join("|")];
+  const groups: string[] = [];
+  const prefix = text.slice(0, labels[0].index ?? 0);
+  if (prefix.trim()) groups.push(`prefix:${numberMultiset(prefix).join("|")}`);
+  for (let i = 0; i < labels.length; i++) {
+    const start = (labels[i].index ?? 0) + labels[i][0].length;
+    const end = i + 1 < labels.length ? (labels[i + 1].index ?? text.length) : text.length;
+    groups.push(`${labels[i][1].toLowerCase()}:${numberMultiset(text.slice(start, end)).join("|")}`);
+  }
+  return groups;
+}
+
 export function validateTaskMathCorrection(original: string, corrected: string) {
   const before = original.trim(), after = corrected.trim();
   if (!before || !after) return { ok: false, reason: "leerer Text" };
   if (subtaskLabels(before).join("|") !== subtaskLabels(after).join("|")) return { ok: false, reason: "Teilaufgaben wurden verändert" };
-  if (numberMultiset(before).join("|") !== numberMultiset(after).join("|")) return { ok: false, reason: "Zahleninhalt wurde verändert" };
+  if (numbersBySubtask(before).join("||") !== numbersBySubtask(after).join("||")) return { ok: false, reason: "Zahleninhalt einer Teilaufgabe wurde verändert" };
   const prose = tokenJaccard(proseTokens(before), proseTokens(after));
   if (prose < 0.84) return { ok: false, reason: `normaler Aufgabentext wurde zu stark verändert (${Math.round(prose * 100)} % Übereinstimmung)` };
   const ratio = after.length / Math.max(1, before.length);
@@ -56,11 +72,7 @@ export function validateTaskMathCorrection(original: string, corrected: string) 
   return { ok: true, reason: "" };
 }
 
-export function likelyBrokenPdfMath(text: string) {
-  const lines = text.replace(/\r/g, "").split("\n");
-  const isolatedNumbers = lines.filter((line) => /^\s*[-+]?\d{1,3}\s*$/.test(line)).length;
-  return isolatedNumbers > 0 || /[�□]/.test(text) || /\b[xyz]\d\b/i.test(text);
-}
+export { likelyBrokenPdfMath };
 
 async function taskImages(bytes: Buffer, pages: number[]) {
   const parser = new PDFParse({ data: Uint8Array.from(bytes) });
@@ -68,7 +80,7 @@ async function taskImages(bytes: Buffer, pages: number[]) {
     const unique = Array.from(new Set(pages.filter((p) => p > 0))).slice(0, 2);
     const images: string[] = [];
     for (const page of unique) {
-      const shot = await parser.getScreenshot({ partial: [page], desiredWidth: 1500, imageDataUrl: true, imageBuffer: false });
+      const shot = await parser.getScreenshot({ partial: [page], desiredWidth: 1800, imageDataUrl: true, imageBuffer: false });
       const dataUrl = String(shot.pages?.[0]?.dataUrl || "");
       if (dataUrl) images.push(dataUrl);
     }
@@ -76,26 +88,40 @@ async function taskImages(bytes: Buffer, pages: number[]) {
   } finally { await parser.destroy(); }
 }
 
-export async function repairTaskMathWithGroq(bytes: Buffer, taskText: string, pages: number[]) {
+export async function repairTaskMathWithGroq(bytes: Buffer, taskText: string, pages: number[], rawPdfEvidence = "") {
   const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) throw new Error("GROQ_API_KEY fehlt für die visuelle Mathekorrektur.");
   const images = await taskImages(bytes, pages);
   if (!images.length) throw new Error("Die zugehörige PDF-Seite konnte nicht gerendert werden.");
-  const prompt = `Du transkribierst ausschließlich die mathematische Notation einer BEREITS ERKANNTEN Aufgabe aus einem deutschen Mathematikdokument. Die Seitenbilder dienen nur dazu, Brüche, Potenzen, Wurzeln und Rechenzeichen zu korrigieren.
+  const anchor = taskText.replace(/\s+/g, " ").trim().slice(0, 220);
+  const prompt = `Du reparierst ausschließlich die MATHEMATISCHE SCHREIBWEISE einer bereits erkannten Aufgabe in einem deutschen Mathematikdokument. Das Seitenbild ist für die räumliche Anordnung der Mathematik maßgeblich. PDF-Text kann Zähler und Nenner in falscher Reihenfolge liefern.
+
+ZIELAUFGABE:
+Sie beginnt mit diesem Wortlaut:
+<<<${anchor}>>>
 
 HARTE REGELN:
-- Der unten stehende Aufgabentext ist die verbindliche Quelle. Keine neue Aufgabe und keine Lösung erzeugen.
-- Normalen deutschen Wortlaut nicht umformulieren.
-- Keine Zahl hinzufügen, löschen oder ändern.
-- Teilaufgaben a), b), *c) usw. exakt erhalten.
-- Nur mathematische Notation korrigieren, wenn sie auf dem Bild eindeutig zu dieser Aufgabe gehört.
-- Brüche als \\frac{a}{b}, Potenzen als x^{2}, Wurzeln als \\sqrt{x}, Multiplikation als \\cdot.
-- Bei Unsicherheit Originalstelle unverändert lassen.
+- Nur die Zielaufgabe bearbeiten. Andere Aufgaben auf dem Seitenbild vollständig ignorieren.
+- Der deutsche Wortlaut des unten stehenden Aufgabentextes bleibt unverändert. Keine neue Aufgabe, Teilaufgabe, Zahl, Erklärung oder Lösung erzeugen.
+- Teilaufgaben a), b), *c) usw. in exakt derselben Reihenfolge und Anzahl erhalten. Auch doppelte Buchstaben im Original bleiben doppelt.
+- Bei mathematischen Stellen das BILD lesen, nicht die Reihenfolge der extrahierten Zahlentokens erraten.
+- Sichtbar übereinander gesetzte Zähler/Nenner als \\frac{Z}{N} schreiben; gemischte Zahlen z. B. -5\\frac{1}{2}.
+- Potenzen als x^{2}, Wurzeln als \\sqrt{x}, Multiplikation als \\cdot.
+- Vollständige Gleichungen/Formeln möglichst in \\( ... \\) setzen, damit KaTeX die gesamte Formel formatiert.
+- Bei Unsicherheit die betreffende Originalstelle unverändert lassen.
 - Antworte ausschließlich als JSON-Objekt {"correctedText":"..."}.
 
-VERBINDLICHER AUFGABENTEXT:
+WICHTIGES BEISPIEL FÜR PDF-SCHADEN:
+Wenn der extrahierte Text etwa "d) 4 3 x+4=25" enthält, im Bild aber die 3 über der 4 steht, ist korrekt: "d) \\(\\frac{3}{4}x+4=25\\)". Das ist nur ein Beispiel für die Leserichtung; übernimm niemals Zahlen aus diesem Beispiel, sondern ausschließlich aus der Zielaufgabe.
+
+VERBINDLICHER AUFGABENTEXT (WORTLAUT UND ZAHLENBESTAND):
 <<<
 ${taskText.slice(0, 9000)}
+>>>
+
+ROHE PDF-TEXTSPUREN DERSELBEN AUFGABE (nur als Hinweis auf Extraktionsschäden, niemals als Layout-Quelle):
+<<<
+${rawPdfEvidence.slice(0, 7000)}
 >>>`;
 
   for (let attempt = 0; attempt < 4; attempt++) {

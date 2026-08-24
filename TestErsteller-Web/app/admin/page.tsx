@@ -30,7 +30,7 @@ export default function AdminPage() {
   const [defaultClass, setDefaultClass] = useState("7");
   const [defaultTopic, setDefaultTopic] = useState("");
   const [useLlm, setUseLlm] = useState(true);
-  const [useVisionOcr, setUseVisionOcr] = useState(false);
+  const [useVisionOcr, setUseVisionOcr] = useState(true);
   const [drafts, setDrafts] = useState<ImportDraft[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -452,7 +452,7 @@ export default function AdminPage() {
             <label>Klasse als Vorgabe<select value={defaultClass} onChange={(e) => setDefaultClass(e.target.value)}><option value="">Automatisch erkennen</option>{LEGACY_CLASSES.filter((x) => Number(x) <= 10).map((x) => <option key={x}>{x}</option>)}</select></label>
             <label>Thema als Vorgabe<select value={defaultTopic} onChange={(e) => setDefaultTopic(e.target.value)}><option value="">Automatisch erkennen</option>{(LEGACY_TOPICS_BY_CLASS[defaultClass] || []).map((x) => <option key={x}>{x}</option>)}</select></label>
             <label className="adminLlmToggle"><input type="checkbox" checked={useLlm} onChange={(e) => setUseLlm(e.target.checked)} disabled={!status.llmConfigured} /><span><b>KI-Analyse verwenden</b><small>{status.llmConfigured ? "Empfohlen für Kompetenz, AFB, Zeit und Erwartungshorizont. Dabei wird der extrahierte Aufgabentext an Groq gesendet." : "GROQ_API_KEY nicht gesetzt – heuristische Analyse bleibt verfügbar."}</small></span><Bot size={18} /></label>
-            <label className="adminLlmToggle"><input type="checkbox" checked={useVisionOcr} onChange={(e) => setUseVisionOcr(e.target.checked)} disabled={!status.llmConfigured} /><span><b>Mathematik visuell korrigieren</b><small>{status.llmConfigured ? "Sichere Variante: Die PDF-Textschicht bestimmt die Aufgaben. Groq darf nur Brüche, Potenzen und andere mathematische Zeichen innerhalb dieses vorhandenen Textes korrigieren." : "Benötigt denselben GROQ_API_KEY."}</small></span><FileSearch size={18} /></label>
+            <label className="adminLlmToggle"><input type="checkbox" checked={useVisionOcr} onChange={(e) => setUseVisionOcr(e.target.checked)} disabled={!status.llmConfigured} /><span><b>Mathematik visuell korrigieren</b><small>{status.llmConfigured ? "Automatisch nur bei verdächtiger PDF-Mathematik: Die Textschicht bestimmt weiterhin die Aufgabe; Groq liest lediglich die mathematische Anordnung im Seitenbild nach (z. B. gestapelte Brüche)." : "Benötigt denselben GROQ_API_KEY."}</small></span><FileSearch size={18} /></label>
             <button className="primary adminAnalyzeButton" disabled={busy || !files.length} onClick={() => void analyze()}>{busy ? <Loader2 className="spin" size={17} /> : <FileSearch size={17} />}Aufgaben erkennen</button>
           </div>
         </div>

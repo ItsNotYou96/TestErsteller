@@ -1,4 +1,4 @@
-# Validierung v3.0
+# Validierung v3.3
 
 ## Regression: Aufgabengrenzen
 
@@ -62,3 +62,25 @@ Bei `Je N P.` wird die höchste erkannte Teilaufgabenbezeichnung (z. B. d) → v
 - Nicht-429-Fehler werden sichtbar als `Ähnlichkeit: Fehler` markiert und als Warnung ausgegeben, statt still wie eine erfolgreiche Prüfung auszusehen.
 - Aufgaben, deren lokaler Treffer klar schwach oder bereits nahezu identisch ist, bleiben bei `Ähnlichkeit: lokal ✓`; sie verbrauchen weiterhin keinen Groq-Request.
 - TS/TSX-Syntax aller Projektdateien wurde mit TypeScript `transpileModule` geprüft.
+
+## v3.3 – Bruch-/Math-Regression
+
+Regression mit `Gleichungen-und-Terme (1)(1).pdf`, Aufgabe 3:
+
+Die gedruckte Seite enthält u. a. folgende zweidimensional gesetzte Mathematik:
+
+- `d)` → `\\frac{3}{4}x+4=25`
+- erstes `e)` → `\\frac{1}{2}x-3=-5\\frac{1}{2}`
+- zweites `e)` → `\\frac{4}{5}-\\frac{3}{20}y=\\frac{3}{4}`
+- `f)` → `\\frac{3}{4}=\\frac{3}{2}-\\frac{3}{8}y`
+
+Die lineare PDF-Textschicht kann dieselben Stellen als nackte Zahlenfolgen liefern (`4 3`, `4 3 20 3 5 4`, ...). Der neue pure Detector `pdfMathSignals.ts` wurde mit folgenden Fällen ausgeführt:
+
+- flach beschädigte Aufgabe 3 → `true`
+- normale lineare Gleichungen ohne Brüche → `false`
+- reine Sachaufgabe mit Zahlen, aber ohne beschädigte Mathe-Struktur → `false`
+- gestapelte Einzelzahlzeilen eines Bruchs → `true`
+
+Zusätzlich wird `pdf-parse.getText()` nun mit `itemJoiner: " "` aufgerufen, damit getrennte Textobjekte ihre Grenze behalten und die Sicherheitsvalidierung z. B. eine gemischte Zahl nicht als vermeintliche `52` missversteht.
+
+Die visuelle Reparatur validiert Teilaufgabenlabels und den Zahlen-Multiset nun pro Teilaufgabe. Eine Korrektur darf Bruchlayout rekonstruieren, aber weder Zahlen zwischen Teilaufgaben verschieben noch neue Zahlen hinzufügen.

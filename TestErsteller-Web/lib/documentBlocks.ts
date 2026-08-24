@@ -276,7 +276,7 @@ function normalizePdfText(value: string) {
 async function parsePdf(name: string, bytes: Buffer): Promise<DocumentSource> {
   const parser = new PDFParse({ data: Uint8Array.from(bytes) });
   try {
-    const initial = await parser.getText({ pageJoiner: "" });
+    const initial = await parser.getText({ pageJoiner: "", itemJoiner: " " });
     const rawPages = Array.isArray((initial as any).pages) ? (initial as any).pages : [];
     const pages: Array<{ pageNumber: number; text: string }> = rawPages.length
       ? rawPages.map((page: any, index: number) => ({ pageNumber: Number(page.num || index + 1), text: String(page.text || "").trim() }))

@@ -1,4 +1,4 @@
-# TestErsteller Web v3.2 – blockbasierter Importer
+# TestErsteller Web v3.3 – blockbasierter Importer
 
 Der Admin-Importer wurde in v3.0 neu aufgebaut. Er versucht nicht mehr, jedes neue Dokumentformat mit zusätzlichen Spezial-Regeln/Regexen zu reparieren.
 
@@ -63,3 +63,17 @@ Die Metadatenanalyse und die semantische Ähnlichkeitsanalyse laufen jetzt in zw
 - Lokale Kandidaten bleiben während einer Rate-Limit-Wartezeit sichtbar.
 
 Damit bedeutet ein Groq-Minutenlimit nur noch eine Wartezeit. Spätere Aufgaben werden nicht still übersprungen.
+
+## v3.3 – robuste Bruch-/PDF-Mathe-Erkennung
+
+Bei PDF-Mathematik wird jetzt zwischen **Aufgabenstruktur** und **mathematischem Layout** getrennt:
+
+- `pdf-parse` erhält beim Textauslesen `itemJoiner: " "`, damit getrennte PDF-Textobjekte nicht versehentlich zu neuen Zahlen verschmelzen (z. B. `5` + `2` → `52`).
+- Die Erkennung einer beschädigten mathematischen Textschicht betrachtet nicht mehr nur isolierte Zahlzeilen. Auch horizontal zusammengefallene nackte Zahlenfolgen innerhalb mathematischer Ausdrücke werden als mögliches Bruch-/Layoutproblem erkannt.
+- Die Erkennung ist bewusst generisch: Sie entscheidet nur, **ob** eine bereits erkannte PDF-Aufgabe visuell geprüft werden soll. Sie rekonstruiert keine spezielle Aufgabe per Regex.
+- Für die visuelle Reparatur wird zusätzlich die rohe Textspur der bereits feststehenden Aufgabe übergeben. Das Seitenbild bleibt für die räumliche Anordnung (Bruchstrich, Zähler/Nenner, Potenzen) maßgeblich.
+- Der Vision-Prompt verlangt vollständige Formeln in `\\( ... \\)` und Brüche als `\\frac{...}{...}`, damit die Admin-KaTeX-Vorschau die gesamte Formel formatiert.
+- Die Sicherheitsprüfung vergleicht Zahlen jetzt **pro Teilaufgabe** statt nur global. Groq darf also keine Zahl zwischen a), b), c) usw. verschieben.
+- Die Option „Mathematik visuell korrigieren“ ist standardmäßig aktiviert, läuft aber weiterhin nur für Aufgaben mit verdächtigen PDF-Mathe-Signalen. Sie kann im Adminbereich deaktiviert werden.
+
+Die visuelle Korrektur ändert weiterhin niemals Aufgabengrenzen oder normalen Aufgabentext.
