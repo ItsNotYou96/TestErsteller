@@ -13,7 +13,11 @@ export function llmModel() {
   return process.env.GROQ_MODEL?.trim() || "openai/gpt-oss-120b";
 }
 
-const singleTaskSchema = {
+export function solutionModel() {
+  return process.env.GROQ_SOLUTION_MODEL?.trim() || "qwen/qwen3.6-27b";
+}
+
+const metadataSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
@@ -23,27 +27,25 @@ const singleTaskSchema = {
     afbRaw: { type: "string" },
     pointsRaw: { type: "string" },
     estimatedTime: { type: "number" },
-    expectation: { type: "string" },
     confidenceTopic: { type: "number" },
     confidenceCompetence: { type: "number" },
     confidenceAfb: { type: "number" },
     confidenceTime: { type: "number" },
-    confidenceExpectation: { type: "number" },
   },
   required: [
-    "title", "topic", "competence", "afbRaw", "pointsRaw", "estimatedTime", "expectation",
-    "confidenceTopic", "confidenceCompetence", "confidenceAfb", "confidenceTime", "confidenceExpectation",
+    "title", "topic", "competence", "afbRaw", "pointsRaw", "estimatedTime",
+    "confidenceTopic", "confidenceCompetence", "confidenceAfb", "confidenceTime",
   ],
 } as const;
 
-function compactPrompt(draft: ImportDraft, defaultClass?: string, defaultTopic?: string) {
+function metadataPrompt(draft: ImportDraft, defaultClass?: string, defaultTopic?: string) {
   const classLevel = defaultClass && LEGACY_TOPICS_BY_CLASS[defaultClass] ? defaultClass : draft.classLevel;
   const topics = LEGACY_TOPICS_BY_CLASS[classLevel] || [];
   const preferredTopic = defaultTopic && topics.includes(defaultTopic) ? defaultTopic : draft.topic;
-  const question = draft.questionText.slice(0, 10500);
+  const question = draft.questionText.slice(0, 8000);
   const pointsKnown = draft.pointsSource === "document" && Boolean(draft.pointsRaw);
 
-  return `Analysiere genau EINE bereits getrennte Mathematikaufgabe für einen schulischen Aufgabenpool. Antworte ausschließlich mit den geforderten strukturierten Metadaten.
+  return `Analysiere genau EINE bereits getrennte Mathematikaufgabe für einen schulischen Aufgabenpool. Erzeuge NUR Metadaten, KEINE Musterlösung.
 
 Klasse: ${classLevel}
 Zulässige Themen: ${topics.join(" | ")}
@@ -58,18 +60,10 @@ Regeln:
 - topic: ausschließlich eines der oben genannten Themen.
 - competence: DOMINANTE Prozesskompetenz der gesamten Aufgabe.
 - afbRaw: global "AFB 1" oder bei Teilaufgaben z. B. "a: AFB 1, b: AFB 2".
-- pointsRaw: ${pointsKnown ? `EXAKT "${draft.pointsRaw}" zurückgeben; diese Punkte stammen aus dem Dokument und dürfen nicht verändert werden.` : "realistische Bepunktung vorschlagen. Bei Teilaufgaben als Summe wie 2+2+3; sonst eine einzelne Zahl. Nur Zahlen und + verwenden."}
+- pointsRaw: ${pointsKnown ? `EXAKT "${draft.pointsRaw}" zurückgeben; nicht verändern.` : "realistische Bepunktung. Bei Teilaufgaben als Summe wie 2+2+3; sonst eine einzelne Zahl. Nur Zahlen und + verwenden."}
 - estimatedTime: realistische Bearbeitungszeit in Minuten.
-- expectation: VOLLSTÄNDIGE, direkt nutzbare Musterlösung / Erwartungshorizont. Jede Teilaufgabe aus dem Aufgabentext muss einzeln vollständig gelöst werden; keine Teilaufgabe auslassen und keine Platzhalter wie „individuelle Lösung“ verwenden, sofern die Aufgabe eindeutig lösbar ist.
-  * Rechen- und Gleichungsaufgaben: vollständigen Rechenweg mit sinnvollen Umformungsschritten UND eindeutigem Endergebnis angeben.
-  * Termaufgaben: geforderte Umformung vollständig durchführen und den vereinfachten Endterm angeben.
-  * Sachaufgaben: Variable(n) definieren, passenden mathematischen Ansatz / Gleichung aufstellen, lösen und einen Antwortsatz angeben.
-  * Begründungs-/Argumentationsaufgaben: vollständige fachliche Begründung formulieren.
-  * Bei mehreren Teilaufgaben die vorhandenen Buchstaben/Bezeichnungen in derselben Reihenfolge verwenden. Wenn eine Bezeichnung im Original doppelt vorkommt, beide Positionen trotzdem getrennt lösen.
-  * Mathematische Ausdrücke möglichst in LaTeX mit \\(...\\) notieren.
-  * Der Erwartungshorizont darf ausführlich sein; Vollständigkeit und fachliche Korrektheit sind wichtiger als Kürze.
-- confidence-Werte: jeweils zwischen 0 und 1.
-- Gib keinen Aufgabentext erneut aus.
+- confidence-Werte jeweils zwischen 0 und 1.
+- Keine Lösung, keinen Erwartungshorizont und keinen Aufgabentext zurückgeben.
 
 Aufgabe:
 ${question}`;
@@ -104,60 +98,54 @@ function rateLimitInfo(response: Response): GroqRateLimitInfo {
 
 function chatOutput(data: any) {
   const content = data?.choices?.[0]?.message?.content;
-  if (typeof content === "string") return content.trim();
-  return "";
+  return typeof content === "string" ? content.trim() : "";
 }
 
-async function groqChat(prompt: string, strict: boolean) {
+function reasoningFields(model: string) {
+  if (model.startsWith("openai/gpt-oss")) return { reasoning_effort: "low", reasoning_format: "hidden" };
+  if (model.startsWith("qwen/")) return { reasoning_effort: "none" };
+  return {};
+}
+
+async function groqMetadataChat(prompt: string, strict: boolean) {
   const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) throw new GroqAnalysisError("GROQ_API_KEY ist nicht gesetzt.", 503);
-
+  const model = llmModel();
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: llmModel(),
-      messages: [
-        { role: "user", content: `Du analysierst und löst Mathematikaufgaben für einen schulischen Aufgabenpool. Halte dich exakt an das verlangte JSON-Format, löse ausschließlich die übergebene Aufgabe und erfinde keine Informationen aus einem anderen Aufgabentext.\n\n${prompt}` },
-      ],
-      reasoning_effort: "low",
-      reasoning_format: "hidden",
+      model,
+      messages: [{ role: "user", content: `Du analysierst Mathematikaufgaben für einen schulischen Aufgabenpool. Halte dich exakt an das verlangte JSON-Format.\n\n${prompt}` }],
+      ...reasoningFields(model),
       response_format: strict
-        ? { type: "json_schema", json_schema: { name: "math_task_metadata", strict: true, schema: singleTaskSchema } }
+        ? { type: "json_schema", json_schema: { name: "math_task_metadata", strict: true, schema: metadataSchema } }
         : { type: "json_object" },
-      max_completion_tokens: 2200,
+      max_completion_tokens: 700,
     }),
     cache: "no-store",
   });
-
   if (!response.ok) {
     const body = await response.text();
-    throw new GroqAnalysisError(`Groq-Analyse fehlgeschlagen (${response.status}): ${body}`, response.status, rateLimitInfo(response));
+    throw new GroqAnalysisError(`Groq-Metadatenanalyse fehlgeschlagen (${response.status}): ${body}`, response.status, rateLimitInfo(response));
   }
   const data = await response.json();
   const text = chatOutput(data);
-  if (!text) throw new GroqAnalysisError("Groq-Analyse hat keine JSON-Ausgabe geliefert.", 502, rateLimitInfo(response));
-  return { text, rateLimit: rateLimitInfo(response) };
+  if (!text) throw new GroqAnalysisError("Groq-Metadatenanalyse hat keine JSON-Ausgabe geliefert.", 502, rateLimitInfo(response));
+  return text;
 }
 
 function isOutputParseFailure(error: unknown) {
   return error instanceof GroqAnalysisError && error.status === 400 && /output_parse_failed|parsing failed|could not be parsed|json/i.test(error.message);
 }
 
-const expectationOnlySchema = {
-  type: "object",
-  additionalProperties: false,
-  properties: { expectation: { type: "string" } },
-  required: ["expectation"],
-} as const;
-
 function subtaskLabels(text: string) {
   return Array.from((text || "").matchAll(/(?:^|[\s\n])\*?([a-z])\)\s*/gim)).map((match) => match[1].toLowerCase());
 }
 
-function expectationLooksComplete(question: string, expectation: string) {
+export function expectationLooksComplete(question: string, expectation: string) {
   const solution = String(expectation || "").trim();
-  if (solution.length < 35) return false;
+  if (solution.length < 45) return false;
   const expected = subtaskLabels(question);
   if (expected.length < 2) return true;
   const actual = subtaskLabels(solution);
@@ -169,46 +157,92 @@ function expectationLooksComplete(question: string, expectation: string) {
   return true;
 }
 
-async function completeExpectationOnly(draft: ImportDraft) {
-  const apiKey = process.env.GROQ_API_KEY?.trim();
-  if (!apiKey) throw new GroqAnalysisError("GROQ_API_KEY ist nicht gesetzt.", 503);
-  const prompt = `Erstelle ausschließlich die VOLLSTÄNDIGE Musterlösung für die folgende Mathematikaufgabe.
+function solutionPrompt(draft: ImportDraft, repair = false) {
+  const labels = subtaskLabels(draft.questionText);
+  return `${repair ? "Der vorherige Lösungsversuch war unvollständig. " : ""}Erstelle ausschließlich einen VOLLSTÄNDIGEN Erwartungshorizont mit Musterlösung für genau diese Mathematikaufgabe.
 
 Regeln:
-- Löse wirklich jede vorhandene Teilaufgabe vollständig und in derselben Reihenfolge.
-- Übernimm die Teilaufgabenbezeichnungen a), b), c) usw. sichtbar in die Lösung. Wenn eine Bezeichnung im Original doppelt vorkommt, müssen auch beide Positionen getrennt gelöst und entsprechend gekennzeichnet werden.
-- Rechen-/Gleichungsaufgaben: nachvollziehbarer Rechenweg und eindeutiges Endergebnis.
-- Termaufgaben: vollständige Umformung und Endterm.
-- Sachaufgaben: Variable(n), Ansatz/Gleichung, Rechenweg, Ergebnis und Antwortsatz.
-- Begründungsaufgaben: vollständige fachliche Begründung.
-- Keine bloßen Hinweise, keine Platzhalter, keine ausgelassenen Teilaufgaben.
-- Mathematische Ausdrücke möglichst als LaTeX mit \\(...\\).
-- Erfinde keine zusätzliche Aufgabe und löse ausschließlich den gegebenen Aufgabentext.
+- Löse wirklich jede vorhandene Teilaufgabe vollständig und in derselben Reihenfolge.${labels.length ? ` Erwartete Teilaufgabenfolge: ${labels.map((x) => `${x})`).join(", ")}.` : ""}
+- Übernimm Teilaufgabenbezeichnungen sichtbar. Doppelte Bezeichnungen im Original bleiben doppelt und werden als getrennte Positionen gelöst.
+- Rechen-/Gleichungsaufgaben: nachvollziehbarer Rechenweg mit sinnvollen Umformungsschritten und eindeutigem Endergebnis.
+- Termaufgaben: vollständige Umformung und vereinfachter Endterm.
+- Sachaufgaben: Variable(n) definieren, Ansatz/Gleichung aufstellen, vollständig lösen und Antwortsatz angeben.
+- Begründungs-/Argumentationsaufgaben: vollständige fachliche Begründung; bei offenen Aufgaben eine konkrete fachlich korrekte Musterlösung bzw. ein vollständiges Bewertungskriterium mit Beispiel.
+- Keine bloßen Hinweise, keine Platzhalter wie „individuelle Lösung“, keine ausgelassenen Teilaufgaben.
+- Mathematische Ausdrücke als LaTeX in \\(...\\) schreiben.
+- Gib NUR die Musterlösung aus, kein JSON, keine Vorrede und den Aufgabentext nicht erneut.
 
 Aufgabe:
 ${draft.questionText.slice(0, 10500)}`;
+}
+
+async function requestSolution(model: string, draft: ImportDraft, repair = false) {
+  const apiKey = process.env.GROQ_API_KEY?.trim();
+  if (!apiKey) throw new GroqAnalysisError("GROQ_API_KEY ist nicht gesetzt.", 503);
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: llmModel(),
-      messages: [{ role: "user", content: prompt }],
-      reasoning_effort: "low",
-      reasoning_format: "hidden",
-      response_format: { type: "json_schema", json_schema: { name: "complete_expectation", strict: true, schema: expectationOnlySchema } },
-      max_completion_tokens: 2400,
+      model,
+      messages: [{ role: "user", content: solutionPrompt(draft, repair) }],
+      ...reasoningFields(model),
+      temperature: model.startsWith("qwen/") ? 0.1 : undefined,
+      max_completion_tokens: 1900,
     }),
     cache: "no-store",
   });
   if (!response.ok) {
     const body = await response.text();
-    throw new GroqAnalysisError(`Groq-Musterlösung fehlgeschlagen (${response.status}): ${body}`, response.status, rateLimitInfo(response));
+    throw new GroqAnalysisError(`Groq-Musterlösung mit ${model} fehlgeschlagen (${response.status}): ${body}`, response.status, rateLimitInfo(response));
   }
   const data = await response.json();
-  const raw = chatOutput(data);
-  if (!raw) throw new GroqAnalysisError("Groq-Musterlösung hat keine JSON-Ausgabe geliefert.", 502, rateLimitInfo(response));
-  try { return String(JSON.parse(raw)?.expectation || "").trim(); }
-  catch { throw new GroqAnalysisError("Groq-Musterlösung hat ungültiges JSON geliefert.", 502, rateLimitInfo(response)); }
+  const text = chatOutput(data);
+  if (!text) throw new GroqAnalysisError(`Groq-Musterlösung mit ${model} war leer.`, 502, rateLimitInfo(response));
+  return text;
+}
+
+export async function generateExpectationWithLlm(draft: ImportDraft): Promise<ImportDraft> {
+  if (!process.env.GROQ_API_KEY?.trim()) return draft;
+  if (expectationLooksComplete(draft.questionText, draft.expectation)) {
+    return { ...draft, expectationStatus: "complete", expectationNote: "Vollständiger Erwartungshorizont bereits vorhanden." };
+  }
+
+  const configured = solutionModel();
+  const models = Array.from(new Set([configured, "openai/gpt-oss-20b", "openai/gpt-oss-120b"]));
+  const rateErrors: GroqAnalysisError[] = [];
+  const otherErrors: string[] = [];
+
+  for (const model of models) {
+    try {
+      let solution = await requestSolution(model, draft, false);
+      if (!expectationLooksComplete(draft.questionText, solution)) {
+        solution = await requestSolution(model, draft, true);
+      }
+      if (!expectationLooksComplete(draft.questionText, solution)) {
+        otherErrors.push(`${model}: Ausgabe war trotz Reparatur unvollständig.`);
+        continue;
+      }
+      return {
+        ...draft,
+        expectation: solution.trim(),
+        expectationStatus: "complete",
+        expectationNote: `Vollständige Musterlösung mit ${model} erzeugt.`,
+        confidence: { ...(draft.confidence || { topic: 0, competence: 0, afb: 0, time: 0, expectation: 0 }), expectation: 0.95 },
+      };
+    } catch (error) {
+      if (error instanceof GroqAnalysisError && error.status === 429) {
+        rateErrors.push(error);
+        continue; // Different Groq models have separate published model limits; try the next one.
+      }
+      otherErrors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (rateErrors.length === models.length) {
+    const best = [...rateErrors].sort((a, b) => (a.rateLimit.retryAfterSeconds || Number.MAX_SAFE_INTEGER) - (b.rateLimit.retryAfterSeconds || Number.MAX_SAFE_INTEGER))[0];
+    throw new GroqAnalysisError("Alle verfügbaren Groq-Modelle für Musterlösungen sind momentan limitiert.", 429, best?.rateLimit || {});
+  }
+  throw new GroqAnalysisError(`Keine vollständige Musterlösung erzeugt: ${otherErrors.join(" | ") || "unbekannter Fehler"}`, 502);
 }
 
 function safePoints(raw: unknown, fallback: string) {
@@ -219,40 +253,23 @@ function safePoints(raw: unknown, fallback: string) {
 
 export async function analyzeDraftWithLlm(draft: ImportDraft, defaultClass?: string, defaultTopic?: string): Promise<ImportDraft> {
   if (!process.env.GROQ_API_KEY?.trim()) return draft;
-  const prompt = compactPrompt(draft, defaultClass, defaultTopic);
-
+  const prompt = metadataPrompt(draft, defaultClass, defaultTopic);
   let text = "";
   try {
-    text = (await groqChat(prompt, true)).text;
+    text = await groqMetadataChat(prompt, true);
   } catch (error) {
     if (!isOutputParseFailure(error)) throw error;
-    // Rare Groq parser failures have occurred with the Responses endpoint. Retry once with
-    // JSON Object Mode; the application still validates every field below.
-    const fallbackPrompt = `${prompt}\n\nAntworte jetzt als EIN gültiges JSON-Objekt mit exakt diesen Schlüsseln: title, topic, competence, afbRaw, pointsRaw, estimatedTime, expectation, confidenceTopic, confidenceCompetence, confidenceAfb, confidenceTime, confidenceExpectation.`;
-    text = (await groqChat(fallbackPrompt, false)).text;
+    text = await groqMetadataChat(`${prompt}\n\nAntworte als ein einziges gültiges JSON-Objekt mit exakt den geforderten Metadatenfeldern.`, false);
   }
 
   let task: any;
   try { task = JSON.parse(text); }
-  catch { throw new GroqAnalysisError("Groq hat trotz Wiederholungsversuch kein gültiges JSON geliefert.", 502); }
-
-  // The metadata response normally already contains the full solution. If a multi-part task
-  // is missing one or more original subtask labels, regenerate ONLY the expectation horizon.
-  // This avoids accepting a short grading hint as a "complete solution" while keeping the
-  // second, more expensive call exceptional rather than the default.
-  if (!expectationLooksComplete(draft.questionText, String(task.expectation || ""))) {
-    const completedExpectation = await completeExpectationOnly(draft);
-    if (completedExpectation) {
-      task.expectation = completedExpectation;
-      task.confidenceExpectation = Math.max(0.9, Number(task.confidenceExpectation) || 0);
-    }
-  }
+  catch { throw new GroqAnalysisError("Groq hat für die Metadaten kein gültiges JSON geliefert.", 502); }
 
   const classLevel = defaultClass && LEGACY_TOPICS_BY_CLASS[defaultClass] ? defaultClass : draft.classLevel;
   const allowedTopics = LEGACY_TOPICS_BY_CLASS[classLevel] || [];
   const fallbackTopic = defaultTopic && allowedTopics.includes(defaultTopic) ? defaultTopic : draft.topic;
   const topic = allowedTopics.includes(String(task.topic)) ? String(task.topic) : (allowedTopics.includes(fallbackTopic) ? fallbackTopic : allowedTopics[0] || "");
-
   const preserveDocumentPoints = draft.pointsSource === "document" && Boolean(draft.pointsRaw);
   const pointsRaw = preserveDocumentPoints ? draft.pointsRaw : safePoints(task.pointsRaw, draft.pointsRaw || "2");
   const maxPoints = parsePointsSpec(pointsRaw).maxPoints || draft.maxPoints || 0;
@@ -268,14 +285,17 @@ export async function analyzeDraftWithLlm(draft: ImportDraft, defaultClass?: str
     maxPoints,
     pointsSource: preserveDocumentPoints ? "document" : "llm",
     estimatedTime: Math.max(0, Number(task.estimatedTime) || draft.estimatedTime || 0),
-    expectation: String(task.expectation || draft.expectation || "").trim(),
+    // Expectation is generated by its own queue/model and must never be erased by metadata analysis.
+    expectation: draft.expectation,
+    expectationStatus: draft.expectationStatus,
+    expectationNote: draft.expectationNote,
     analysisMode: "llm",
     confidence: {
       topic: Math.max(0, Math.min(1, Number(task.confidenceTopic) || 0)),
       competence: Math.max(0, Math.min(1, Number(task.confidenceCompetence) || 0)),
       afb: Math.max(0, Math.min(1, Number(task.confidenceAfb) || 0)),
       time: Math.max(0, Math.min(1, Number(task.confidenceTime) || 0)),
-      expectation: Math.max(0, Math.min(1, Number(task.confidenceExpectation) || 0)),
+      expectation: draft.confidence?.expectation || 0,
     },
   };
 }

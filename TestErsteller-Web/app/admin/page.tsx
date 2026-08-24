@@ -245,6 +245,60 @@ export default function AdminPage() {
         if (mathWarnings.length) setWarnings((prev) => [...prev, `Visuelle Mathekorrektur: ${mathWarnings.join(" | ")}`]);
       }
 
+      // Full expectation horizons run in their own queue BEFORE metadata. They use a dedicated
+      // solution model with model fallbacks, so a 120B metadata limit can no longer leave tasks 2..N
+      // without sample solutions. Existing complete solutions are kept unchanged.
+      if (data.llmRequested && working.length) {
+        const expectationWarnings: string[] = [];
+        for (let i = 0; i < working.length; i++) {
+          working = working.map((draft, index) => index === i ? {
+            ...draft,
+            expectationStatus: "checking",
+            expectationNote: "Vollständigkeit wird geprüft / Musterlösung wird erzeugt …",
+          } : draft);
+          setDrafts([...working]);
+
+          let completed = false;
+          for (let attempt = 0; attempt < 3 && !completed; attempt++) {
+            setMessage(`Musterlösungen ${i + 1}/${working.length}: ${working[i].title}`);
+            const rr = await fetch("/api/admin/generate-expectation", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ draft: working[i] }),
+            });
+            const result = await rr.json().catch(() => ({}));
+            if (rr.ok && result.draft) {
+              working = working.map((draft, index) => index === i ? result.draft : draft);
+              setDrafts([...working]);
+              completed = true;
+              break;
+            }
+            if (rr.status === 429) {
+              const retrySeconds = Math.max(2, Number(result.retryAfterSeconds) || parseResetSeconds(result.resetTokens) || 8);
+              if (retrySeconds <= MAX_AUTO_GROQ_WAIT_SECONDS && attempt < MAX_SHORT_RATE_LIMIT_RETRIES) {
+                working = working.map((draft, index) => index === i ? { ...draft, expectationStatus: "checking", expectationNote: `Groq-Limit; kurzer Retry in ${Math.ceil(retrySeconds)} s.` } : draft);
+                setDrafts([...working]);
+                setMessage(`Musterlösungen ${i + 1}/${working.length}: Groq-Limit · kurzer Retry in ${Math.ceil(retrySeconds)} s …`);
+                await sleep((retrySeconds + 0.5) * 1000);
+                continue;
+              }
+            }
+
+            const reason = result.error || `Groq HTTP ${rr.status}`;
+            working = working.map((draft, index) => index === i ? { ...draft, expectationStatus: "failed", expectationNote: reason } : draft);
+            setDrafts([...working]);
+            expectationWarnings.push(`${working[i].title}: ${reason}`);
+            completed = true;
+          }
+          if (!completed) {
+            working = working.map((draft, index) => index === i ? { ...draft, expectationStatus: "failed", expectationNote: "Keine vollständige Musterlösung nach mehreren Versuchen erzeugt." } : draft);
+            setDrafts([...working]);
+            expectationWarnings.push(`${working[i].title}: keine vollständige Musterlösung nach mehreren Versuchen.`);
+          }
+        }
+        if (expectationWarnings.length) setWarnings((prev) => [...prev, `Musterlösungen: ${expectationWarnings.join(" | ")}`]);
+      }
+
       if (data.llmRequested && working.length) {
         const llmWarnings: string[] = [];
         let stopMetadataGroq = false;
@@ -373,10 +427,11 @@ export default function AdminPage() {
       }
 
       const llmCount = working.filter((x) => x.analysisMode === "llm").length;
+      const expectationCount = working.filter((x) => x.expectationStatus === "complete").length;
       const duplicateChecked = working.filter((x) => x.duplicateCheckStatus === "local" || x.duplicateCheckStatus === "partial" || x.duplicateCheckStatus === "groq").length;
       const duplicateFailed = working.filter((x) => x.duplicateCheckStatus === "failed").length;
       const heuristicCount = working.length - llmCount;
-      setMessage(`${working.length} Aufgaben erkannt${data.llmRequested ? ` · ${llmCount} Metadaten per Groq verfeinert${heuristicCount ? ` · ${heuristicCount} heuristisch` : ""}` : ""} · Ähnlichkeit ${duplicateChecked}/${working.length} geprüft${duplicateFailed ? ` · ${duplicateFailed} fehlgeschlagen` : ""}. Bitte Vorschläge prüfen.`);
+      setMessage(`${working.length} Aufgaben erkannt${data.llmRequested ? ` · Musterlösungen ${expectationCount}/${working.length} vollständig · ${llmCount} Metadaten per Groq verfeinert${heuristicCount ? ` · ${heuristicCount} heuristisch` : ""}` : ""} · Ähnlichkeit ${duplicateChecked}/${working.length} geprüft${duplicateFailed ? ` · ${duplicateFailed} fehlgeschlagen` : ""}. Bitte Vorschläge prüfen.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   }
@@ -729,7 +784,7 @@ export default function AdminPage() {
                   </div>
                   <div className="span2 adminLatexField">
                     <div className="adminLatexFieldHead">
-                      <span>Erwartungshorizont · vollständige Musterlösung</span>
+                      <span>Erwartungshorizont · vollständige Musterlösung{selected.expectationStatus === "checking" ? " · wird erzeugt …" : selected.expectationStatus === "complete" ? " · ✓" : selected.expectationStatus === "failed" ? " · Fehler" : ""}</span>
                       <button type="button" className="secondary adminLatexToggle" onClick={() => setEditExpectationSource((value) => !value)}>
                         {editExpectationSource ? <Eye size={14} /> : <Code2 size={14} />}
                         {editExpectationSource ? "Formatierte Ansicht" : "Quelltext bearbeiten"}
@@ -738,7 +793,7 @@ export default function AdminPage() {
                     {editExpectationSource ? (
                       <textarea rows={8} value={selected.expectation} onChange={(e) => patchDraft(selected.id, { expectation: e.target.value })} placeholder="Vollständige Musterlösung mit Rechenweg / Bewertungserwartung" />
                     ) : (
-                      <div className="adminLatexRendered">{selected.expectation ? <LatexText text={selected.expectation} /> : <span className="adminLatexEmpty">Noch keine vollständige Musterlösung vorhanden.</span>}</div>
+                      <div className="adminLatexRendered">{selected.expectation ? <LatexText text={selected.expectation} /> : <span className="adminLatexEmpty">{selected.expectationNote || "Noch keine vollständige Musterlösung vorhanden."}</span>}</div>
                     )}
                   </div>
                 </div>

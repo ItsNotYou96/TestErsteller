@@ -97,3 +97,16 @@ Geprüfte Schutzmaßnahmen:
 - Fehlende Kandidatenbewertungen erzeugen Status `partial`; lokale Kandidaten bleiben sichtbar.
 - 429 bleibt ein echter Rate-Limit-Fehler und wird weiterhin von der bestehenden Client-Queue behandelt.
 - TypeScript-Transpile-Test über 29 TS/TSX-Dateien: 0 Syntaxdiagnosen.
+
+## v4.8 – Regression Erwartungshorizont
+
+Geprüft:
+- `lib/llmAnalysis.ts`, `lib/adminTypes.ts`, `app/api/admin/generate-expectation/route.ts` und `app/admin/page.tsx` via TypeScript `transpileModule`: keine Syntaxdiagnosen.
+- Erwartungshorizont ist nicht mehr Teil des Metadaten-Schemas/-Prompts.
+- Admin-Reihenfolge: PDF-Mathereparatur -> Musterlösungsqueue -> Metadatenqueue -> Ähnlichkeitsqueue.
+- Die Musterlösungsqueue iteriert über **alle** erkannten Aufgaben und wird nicht durch `stopMetadataGroq` beendet.
+- Modellfallback für Musterlösungen: konfiguriertes Lösungsmodell (Default Qwen) -> GPT-OSS 20B -> GPT-OSS 120B.
+- Metadatenanalyse bewahrt `draft.expectation`, `expectationStatus` und `expectationNote` unverändert.
+- Vollständigkeitsprüfung zählt auch doppelte Teilaufgabenlabels (z. B. `e), e)`) positionsunabhängig über Häufigkeiten.
+
+Ein vollständiger `next build` war in der isolierten Umgebung ohne installierte Projekt-Abhängigkeiten nicht möglich; die geänderten TS/TSX-Dateien wurden isoliert transpiliert.

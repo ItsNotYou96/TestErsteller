@@ -207,3 +207,14 @@ Lokale Prozentwerte werden in der Adminansicht nicht mehr als Ähnlichkeitswert 
 - Bei Groq-Fehlern `json_validate_failed`/`output_parse_failed` wird einmal automatisch auf JSON Object Mode zurückgefallen und serverseitig validiert.
 - Fehlende Einzelbewertungen zerstören nicht mehr das gesamte Paket. Bereits verwertbare Ergebnisse bleiben erhalten; nicht bewertete Kandidaten bleiben als lokale Vergleiche sichtbar.
 - Neuer UI-Zustand `Lokal ✓ · KI teilweise` macht Teilresultate transparent, ohne den Import als fehlgeschlagen zu markieren.
+
+## v4.8 – Erwartungshorizont unabhängig von Metadaten
+
+- Vollständige Musterlösungen laufen jetzt in einer eigenen Browser-Queue **vor** der Metadaten- und Ähnlichkeitsanalyse.
+- Ursache des bisherigen Fehlers: Nach einem langen Rate-Limit wurde die 120B-Metadatenqueue abgebrochen. Da die Musterlösung Bestandteil desselben Requests war, blieben Aufgaben 2..N ohne Erwartungshorizont.
+- Metadaten-Requests enthalten ab v4.8 **keine Musterlösung mehr** und sind dadurch deutlich kleiner (`max_completion_tokens: 700`).
+- Musterlösungen verwenden standardmäßig `qwen/qwen3.6-27b` (`GROQ_SOLUTION_MODEL`, optional) und fallen bei 429 automatisch auf `openai/gpt-oss-20b` und danach `openai/gpt-oss-120b` zurück.
+- Die Musterlösungs-API nutzt bewusst **Plain-Text-Ausgabe statt Structured JSON**, damit lange mathematische Lösungen nicht an JSON-Schema-Parsing scheitern.
+- Jede Lösung wird auf Mindestlänge und – bei mehrteiligen Aufgaben – auf alle Teilaufgabenbezeichnungen geprüft. Bei unvollständiger Ausgabe erfolgt ein gezielter Reparaturversuch.
+- Eine erfolgreiche Metadatenanalyse kann einen bereits erzeugten Erwartungshorizont nicht mehr überschreiben oder leeren.
+- Die Adminansicht zeigt pro Aufgabe `wird erzeugt`, `✓` oder `Fehler` beim Erwartungshorizont sowie bei Fehlern den konkreten Grund.

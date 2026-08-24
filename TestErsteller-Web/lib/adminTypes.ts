@@ -45,6 +45,8 @@ export interface ImportDraft {
   pointsSource?: "document" | "heuristic" | "llm";
   estimatedTime: number;
   expectation: string;
+  expectationStatus?: "pending" | "checking" | "complete" | "failed";
+  expectationNote?: string;
   imageDataUrl?: string;
   imageName?: string;
   include: boolean;
