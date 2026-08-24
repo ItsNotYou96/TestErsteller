@@ -52,3 +52,13 @@ Bei `Je N P.` wird die höchste erkannte Teilaufgabenbezeichnung (z. B. d) → v
 - max_completion_tokens für das Reranking von 1200 auf 600 reduziert
 - bereits vorhandener duplicatePool wird nach der Metadatenanalyse wiederverwendet, auch wenn `duplicates` leer ist
 - Syntax-Transpilierung aller TS/TSX-Dateien separat geprüft
+
+## v3.2 – Rate-Limit-/Queue-Regression
+
+- Metadatenanalyse (`/api/admin/analyze-task`) und Duplikat-Reranking (`/api/admin/check-duplicate`) sind getrennte Requests/Queues.
+- `duplicateCheck.ts` gibt bei einem nicht erfolgreichen Groq-Rerank keinen stillen Kandidaten-Fallback mehr zurück. HTTP-Fehler werden als `DuplicateRerankError` mit Status und Rate-Limit-Headern weitergereicht.
+- Bei HTTP 429 hält die Admin-Queue dieselbe Aufgabe fest, zeigt den Wartezustand an, wartet `retry-after` bzw. `x-ratelimit-reset-tokens` ab und wiederholt ausschließlich die Ähnlichkeitsprüfung.
+- Es gibt für 429 keinen Vier-Versuche-Abbruch mehr in der Duplicate-Queue; die nächste Aufgabe beginnt erst nach erfolgreicher Prüfung der aktuellen Aufgabe.
+- Nicht-429-Fehler werden sichtbar als `Ähnlichkeit: Fehler` markiert und als Warnung ausgegeben, statt still wie eine erfolgreiche Prüfung auszusehen.
+- Aufgaben, deren lokaler Treffer klar schwach oder bereits nahezu identisch ist, bleiben bei `Ähnlichkeit: lokal ✓`; sie verbrauchen weiterhin keinen Groq-Request.
+- TS/TSX-Syntax aller Projektdateien wurde mit TypeScript `transpileModule` geprüft.

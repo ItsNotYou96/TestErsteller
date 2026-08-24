@@ -18,6 +18,33 @@ const RERANK_CANDIDATE_FLOOR = 0.26;
 const MAX_RERANK_CANDIDATES = 5;
 const MAX_LOCAL_POOL = 12;
 
+export type DuplicateRateLimitInfo = {
+  retryAfterSeconds?: number;
+  remainingTokens?: number;
+  resetTokens?: string;
+};
+
+export class DuplicateRerankError extends Error {
+  status: number;
+  rateLimit: DuplicateRateLimitInfo;
+  constructor(message: string, status: number, rateLimit: DuplicateRateLimitInfo = {}) {
+    super(message);
+    this.name = "DuplicateRerankError";
+    this.status = status;
+    this.rateLimit = rateLimit;
+  }
+}
+
+function duplicateRateLimitInfo(response: Response): DuplicateRateLimitInfo {
+  const retry = Number(response.headers.get("retry-after") || "");
+  const remaining = Number(response.headers.get("x-ratelimit-remaining-tokens") || "");
+  return {
+    retryAfterSeconds: Number.isFinite(retry) && retry > 0 ? retry : undefined,
+    remainingTokens: Number.isFinite(remaining) ? remaining : undefined,
+    resetTokens: response.headers.get("x-ratelimit-reset-tokens") || undefined,
+  };
+}
+
 function canonical(text: string) {
   return (text || "").normalize("NFKC").toLowerCase()
     .replace(/[−–—]/g, "-").replace(/[·⋅×]/g, "*").replace(/÷/g, "/")
@@ -188,9 +215,9 @@ const RERANK_SCHEMA = {
 
 async function rerankWithGroq(draft: ImportDraft, candidates: DuplicateCandidate[]) {
   const apiKey = process.env.GROQ_API_KEY?.trim();
-  if (!apiKey || !candidates.length) return candidates;
+  if (!apiKey || !candidates.length) return { candidates, usedGroq: false };
   const selection = rerankSelection(candidates);
-  if (!selection.shouldCallGroq) return candidates.sort((a, b) => b.score - a.score);
+  if (!selection.shouldCallGroq) return { candidates: candidates.sort((a, b) => b.score - a.score), usedGroq: false };
   const rerankCandidates = selection.candidates;
   const prompt = `Vergleiche EINE neue Mathematikaufgabe mit bestehenden Aufgaben. Entscheide didaktisch, ob es praktisch dieselbe Aufgabe/Variante ist, nur dieselbe mathematische Fertigkeit prüft, lediglich thematisch verwandt ist oder nicht verwandt ist.
 
@@ -215,12 +242,20 @@ ${rerankCandidates.map((c, i) => `#${i + 1} candidateId=${c.id}\nTitel: ${c.titl
     }),
     cache: "no-store",
   });
-  if (!response.ok) return candidates;
+  if (!response.ok) {
+    const body = await response.text();
+    throw new DuplicateRerankError(
+      `Groq-Ähnlichkeitsanalyse fehlgeschlagen (${response.status}): ${body}`,
+      response.status,
+      duplicateRateLimitInfo(response),
+    );
+  }
   const data = await response.json();
   const raw = data?.choices?.[0]?.message?.content;
-  if (typeof raw !== "string") return candidates;
+  if (typeof raw !== "string") throw new DuplicateRerankError("Groq-Ähnlichkeitsanalyse hat keine JSON-Ausgabe geliefert.", 502, duplicateRateLimitInfo(response));
   let parsed: any;
-  try { parsed = JSON.parse(raw); } catch { return candidates; }
+  try { parsed = JSON.parse(raw); }
+  catch { throw new DuplicateRerankError("Groq-Ähnlichkeitsanalyse hat ungültiges JSON geliefert.", 502, duplicateRateLimitInfo(response)); }
   const byId = new Map(rerankCandidates.map((c) => [c.id, c]));
   for (const match of parsed.matches || []) {
     const candidate = byId.get(String(match.candidateId));
@@ -232,7 +267,7 @@ ${rerankCandidates.map((c, i) => `#${i + 1} candidateId=${c.id}\nTitel: ${c.titl
     // isolated overconfident answer.
     candidate.score = Math.max(0, Math.min(1, 0.82 * modelScore + 0.18 * (candidate.localScore || 0)));
   }
-  return candidates.sort((a, b) => b.score - a.score);
+  return { candidates: candidates.sort((a, b) => b.score - a.score), usedGroq: true };
 }
 
 export async function addDuplicateCandidates(drafts: ImportDraft[], options: { llmRerank?: boolean } = {}) {
@@ -243,7 +278,23 @@ export async function addDuplicateCandidates(drafts: ImportDraft[], options: { l
     if (!classCache.has(draft.classLevel)) classCache.set(draft.classLevel, await allTasksForClass(draft.classLevel, cache));
     let candidates = localCandidates(draft, classCache.get(draft.classLevel) || []);
     draft.duplicatePool = candidates.slice(0, MAX_LOCAL_POOL);
-    if (options.llmRerank && process.env.GROQ_API_KEY?.trim()) candidates = await rerankWithGroq(draft, candidates);
+    const localSelection = rerankSelection(candidates);
+    draft.duplicateNeedsRerank = localSelection.shouldCallGroq;
+    draft.duplicateCheckStatus = localSelection.shouldCallGroq ? "pending" : "local";
+    draft.duplicateCheckNote = localSelection.shouldCallGroq
+      ? "Lokale Vorauswahl abgeschlossen; semantische Prüfung ausstehend."
+      : candidates.length
+        ? "Vollständig lokal geprüft; kein zusätzlicher KI-Vergleich nötig."
+        : "Vollständig lokal geprüft; keine bestehenden Vergleichsaufgaben gefunden.";
+    if (options.llmRerank && process.env.GROQ_API_KEY?.trim()) {
+      const reranked = await rerankWithGroq(draft, candidates);
+      candidates = reranked.candidates;
+      draft.duplicateCheckStatus = reranked.usedGroq ? "groq" : "local";
+      draft.duplicateNeedsRerank = false;
+      draft.duplicateCheckNote = reranked.usedGroq
+        ? "Lokale Vorauswahl und semantische Groq-Prüfung abgeschlossen."
+        : "Vollständig lokal geprüft; kein zusätzlicher KI-Vergleich nötig.";
+    }
     const visible = candidates.filter((candidate) => candidate.score >= (candidate.relation ? 0.45 : 0.42)).slice(0, 5);
     draft.duplicates = visible;
     draft.duplicate = visible[0];
@@ -255,12 +306,25 @@ export async function addDuplicateCandidates(drafts: ImportDraft[], options: { l
 
 export async function rerankDuplicateCandidates(draft: ImportDraft) {
   const existing = (draft.duplicatePool?.length ? draft.duplicatePool : draft.duplicates || []).map((candidate) => ({ ...candidate }));
-  if (!existing.length) return draft;
-  const candidates = process.env.GROQ_API_KEY?.trim() ? await rerankWithGroq(draft, existing) : existing;
+  if (!existing.length) {
+    draft.duplicateNeedsRerank = false;
+    draft.duplicateCheckStatus = "local";
+    draft.duplicateCheckNote = "Vollständig lokal geprüft; keine bestehenden Vergleichsaufgaben gefunden.";
+    return draft;
+  }
+  const reranked = process.env.GROQ_API_KEY?.trim()
+    ? await rerankWithGroq(draft, existing)
+    : { candidates: existing, usedGroq: false };
+  const candidates = reranked.candidates;
   const visible = candidates.filter((candidate) => candidate.score >= (candidate.relation ? 0.45 : 0.42)).slice(0, 5);
   draft.duplicatePool = candidates.slice(0, MAX_LOCAL_POOL);
   draft.duplicates = visible;
   draft.duplicate = visible[0];
+  draft.duplicateNeedsRerank = false;
+  draft.duplicateCheckStatus = reranked.usedGroq ? "groq" : "local";
+  draft.duplicateCheckNote = reranked.usedGroq
+    ? "Lokale Vorauswahl und semantische Groq-Prüfung abgeschlossen."
+    : "Vollständig lokal geprüft; kein zusätzlicher KI-Vergleich nötig.";
   if (draft.duplicate?.relation === "near_duplicate" && draft.duplicate.score >= 0.97) draft.include = false;
   return draft;
 }

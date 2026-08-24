@@ -174,7 +174,7 @@ export default function AdminPage() {
       if (data.llmRequested && working.length) {
         const llmWarnings: string[] = [];
         for (let i = 0; i < working.length; i++) {
-          setMessage(`${working.length} Aufgaben erkannt. Groq analysiert Aufgabe ${i + 1} von ${working.length}: ${working[i].title}`);
+          setMessage(`Metadaten ${i + 1}/${working.length}: ${working[i].title}`);
           let completed = false;
           for (let attempt = 0; attempt < 4 && !completed; attempt++) {
             const rr = await fetch("/api/admin/analyze-task", {
@@ -191,7 +191,7 @@ export default function AdminPage() {
             }
             if (rr.status === 429) {
               const retrySeconds = Math.max(2, Number(result.retryAfterSeconds) || parseResetSeconds(result.resetTokens) || 8);
-              setMessage(`Groq-Free-Tier kurz ausgelastet. Warte ${Math.ceil(retrySeconds)} s, dann geht Aufgabe ${i + 1} automatisch weiter …`);
+              setMessage(`Metadaten ${i + 1}/${working.length}: Groq-Limit erreicht · Fortsetzung automatisch in ${Math.ceil(retrySeconds)} s …`);
               await sleep((retrySeconds + 0.5) * 1000);
               continue;
             }
@@ -203,8 +203,72 @@ export default function AdminPage() {
         if (llmWarnings.length) setWarnings((prev) => [...prev, `Einige Aufgaben konnten nicht per Groq verfeinert werden: ${llmWarnings.join(" | ")}`]);
       }
 
+      // Duplicate checking is deliberately a second queue. Every task is already compared locally
+      // during /import. Only ambiguous local matches need Groq. A 429 is never treated as "done":
+      // this exact task waits and retries until the rate-limit window opens again.
+      if (data.llmRequested && working.length) {
+        const duplicateWarnings: string[] = [];
+        for (let i = 0; i < working.length; i++) {
+          if (!working[i].duplicateNeedsRerank) continue;
+
+          working = working.map((draft, index) => index === i ? {
+            ...draft,
+            duplicateCheckStatus: "checking",
+            duplicateCheckNote: "Semantische Ähnlichkeitsprüfung läuft …",
+          } : draft);
+          setDrafts([...working]);
+
+          while (true) {
+            setMessage(`Ähnlichkeit ${i + 1}/${working.length}: ${working[i].title}`);
+            const rr = await fetch("/api/admin/check-duplicate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ draft: working[i] }),
+            });
+            const result = await rr.json().catch(() => ({}));
+
+            if (rr.ok && result.draft) {
+              working = working.map((draft, index) => index === i ? result.draft : draft);
+              setDrafts([...working]);
+              break;
+            }
+
+            if (rr.status === 429) {
+              const retrySeconds = Math.max(2, Number(result.retryAfterSeconds) || parseResetSeconds(result.resetTokens) || 8);
+              working = working.map((draft, index) => index === i ? {
+                ...draft,
+                duplicateCheckStatus: "pending",
+                duplicateCheckNote: `Groq-Limit erreicht; automatische Fortsetzung in ${Math.ceil(retrySeconds)} s.`,
+              } : draft);
+              setDrafts([...working]);
+              setMessage(`Ähnlichkeit ${i + 1}/${working.length}: Groq-Limit erreicht · Fortsetzung automatisch in ${Math.ceil(retrySeconds)} s …`);
+              await sleep((retrySeconds + 0.5) * 1000);
+              working = working.map((draft, index) => index === i ? {
+                ...draft,
+                duplicateCheckStatus: "checking",
+                duplicateCheckNote: "Semantische Ähnlichkeitsprüfung läuft …",
+              } : draft);
+              setDrafts([...working]);
+              continue;
+            }
+
+            working = working.map((draft, index) => index === i ? {
+              ...draft,
+              duplicateCheckStatus: "failed",
+              duplicateCheckNote: result.error || `Ähnlichkeitsprüfung fehlgeschlagen (HTTP ${rr.status}).`,
+            } : draft);
+            setDrafts([...working]);
+            duplicateWarnings.push(`${working[i].title}: ${result.error || `HTTP ${rr.status}`}`);
+            break;
+          }
+        }
+        if (duplicateWarnings.length) setWarnings((prev) => [...prev, `Ähnlichkeitsprüfung fehlgeschlagen: ${duplicateWarnings.join(" | ")}`]);
+      }
+
       const llmCount = working.filter((x) => x.analysisMode === "llm").length;
-      setMessage(`${working.length} Aufgaben erkannt${data.llmRequested ? ` · ${llmCount} per Groq verfeinert` : ""}. Bitte Vorschläge prüfen.`);
+      const duplicateChecked = working.filter((x) => x.duplicateCheckStatus === "local" || x.duplicateCheckStatus === "groq").length;
+      const duplicateFailed = working.filter((x) => x.duplicateCheckStatus === "failed").length;
+      setMessage(`${working.length} Aufgaben erkannt${data.llmRequested ? ` · ${llmCount} Metadaten per Groq verfeinert` : ""} · Ähnlichkeit ${duplicateChecked}/${working.length} geprüft${duplicateFailed ? ` · ${duplicateFailed} fehlgeschlagen` : ""}. Bitte Vorschläge prüfen.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   }
@@ -237,13 +301,30 @@ export default function AdminPage() {
     return "Mögliche Ähnlichkeit";
   }
 
+  function duplicateStatusLabel(draft: ImportDraft) {
+    if (draft.duplicateCheckStatus === "groq") return "Ähnlichkeit: KI ✓";
+    if (draft.duplicateCheckStatus === "local") return "Ähnlichkeit: lokal ✓";
+    if (draft.duplicateCheckStatus === "checking") return "Ähnlichkeit: prüft …";
+    if (draft.duplicateCheckStatus === "failed") return "Ähnlichkeit: Fehler";
+    return "Ähnlichkeit: wartet";
+  }
+
   function patchDraft(id: string, patch: Partial<ImportDraft>) {
     setDrafts((prev) => prev.map((draft) => draft.id === id ? { ...draft, ...patch } : draft));
   }
 
   function changeClass(draft: ImportDraft, classLevel: string) {
     const topics = LEGACY_TOPICS_BY_CLASS[classLevel] || [];
-    patchDraft(draft.id, { classLevel, topic: topics.includes(draft.topic) ? draft.topic : topics[0] || "", duplicate: undefined, duplicates: undefined, duplicatePool: undefined });
+    patchDraft(draft.id, {
+      classLevel,
+      topic: topics.includes(draft.topic) ? draft.topic : topics[0] || "",
+      duplicate: undefined,
+      duplicates: undefined,
+      duplicatePool: undefined,
+      duplicateNeedsRerank: false,
+      duplicateCheckStatus: "pending",
+      duplicateCheckNote: "Klasse wurde geändert; Ähnlichkeitsprüfung beim nächsten Dokumentlauf neu berechnen.",
+    });
   }
 
   async function addImage(draft: ImportDraft, file?: File) {
@@ -392,7 +473,11 @@ export default function AdminPage() {
                 <button key={draft.id} className={`adminDraftCard ${selected?.id === draft.id ? "active" : ""} ${!draft.include ? "excluded" : ""}`} onClick={() => setSelectedId(draft.id)}>
                   <span className="adminDraftIndex">{index + 1}</span>
                   <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P.{draft.pointsSource === "heuristic" ? " (geschätzt)" : ""} · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}{draft.segmentationConfidence ? ` · Struktur ${Math.round(draft.segmentationConfidence * 100)}%` : ""}{draft.mathRepair === "visual" ? " · Mathe visuell korrigiert" : draft.mathRepair === "rejected" ? " · Mathe-Korrektur verworfen" : ""}</small></span>
-                  <span className="adminDraftBadges">{draft.duplicate && <em className={draft.duplicate.score >= .96 ? "danger" : "warn"}>{Math.round(draft.duplicate.score * 100)}% ähnlich</em>}{draft.include ? <Check size={16} /> : <X size={16} />}</span>
+                  <span className="adminDraftBadges">
+                    <em className={`duplicateStatus ${draft.duplicateCheckStatus || "pending"}`}>{duplicateStatusLabel(draft)}</em>
+                    {draft.duplicate && <em className={draft.duplicate.score >= .96 ? "danger" : "warn"}>{Math.round(draft.duplicate.score * 100)}% ähnlich</em>}
+                    {draft.include ? <Check size={16} /> : <X size={16} />}
+                  </span>
                 </button>
               ))}
             </aside>
@@ -403,6 +488,14 @@ export default function AdminPage() {
                   <div><span className="eyebrow">{selected.analysisMode === "llm" ? "KI-VORSCHLAG" : "HEURISTISCHER VORSCHLAG"}</span><h2>{selected.title || "Aufgabe"}</h2><p>Quelle: {selected.sourceFile}</p></div>
                   <label className={`adminIncludeToggle ${selected.include ? "on" : ""}`}><input type="checkbox" checked={selected.include} onChange={(e) => patchDraft(selected.id, { include: e.target.checked })} />{selected.include ? "Wird importiert" : "Verworfen"}</label>
                 </div>
+
+                <section className={`adminDuplicateCheckStatus ${selected.duplicateCheckStatus || "pending"}`}>
+                  <div>
+                    {selected.duplicateCheckStatus === "checking" ? <Loader2 className="spin" size={15} /> : selected.duplicateCheckStatus === "failed" ? <AlertTriangle size={15} /> : <CheckCircle2 size={15} />}
+                    <strong>{duplicateStatusLabel(selected)}</strong>
+                  </div>
+                  <span>{selected.duplicateCheckNote || "Lokaler Vergleich steht noch aus."}</span>
+                </section>
 
                 {selected.duplicate && (
                   <section className={`adminDuplicate ${selected.duplicate.score >= .96 ? "high" : ""}`}>

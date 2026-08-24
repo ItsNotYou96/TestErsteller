@@ -39,6 +39,9 @@ export interface ImportDraft {
   duplicate?: DuplicateCandidate;
   duplicates?: DuplicateCandidate[];
   duplicatePool?: DuplicateCandidate[];
+  duplicateNeedsRerank?: boolean;
+  duplicateCheckStatus?: "pending" | "checking" | "local" | "groq" | "failed";
+  duplicateCheckNote?: string;
   confidence?: {
     topic: number;
     competence: number;

@@ -1,4 +1,4 @@
-# TestErsteller Web v3.0 – blockbasierter Importer
+# TestErsteller Web v3.2 – blockbasierter Importer
 
 Der Admin-Importer wurde in v3.0 neu aufgebaut. Er versucht nicht mehr, jedes neue Dokumentformat mit zusätzlichen Spezial-Regeln/Regexen zu reparieren.
 
@@ -50,3 +50,16 @@ Die Duplikatprüfung arbeitet jetzt konsequent zweistufig:
 5. Bereits geladene Kandidaten werden nach der Metadatenanalyse wiederverwendet; fehlende sichtbare Treffer lösen keine zweite vollständige Notion-Suche mehr aus.
 
 Dadurch sinken Groq-Tokenverbrauch und Wartezeiten deutlich, besonders bei mehreren Dokumenten in einem Importlauf.
+
+## v3.2 – vollständige Ähnlichkeits-Queue
+
+Die Metadatenanalyse und die semantische Ähnlichkeitsanalyse laufen jetzt in zwei getrennten Browser-Queues.
+
+- Jede Aufgabe wird bereits beim Import lokal gegen die vorhandenen Aufgaben der Klasse geprüft.
+- Nur lokal uneindeutige Treffer werden anschließend in eine Groq-Queue aufgenommen.
+- Ein Groq-`429` bei der Ähnlichkeitsanalyse wird **nicht mehr als erfolgreicher Fallback verschluckt**. Die konkrete Aufgabe bleibt in der Queue, wartet anhand von `retry-after`/Token-Reset und wird danach automatisch erneut geprüft.
+- Der bereits erfolgreiche Metadaten-Request wird bei einem Duplicate-Rate-Limit nicht wiederholt.
+- Im linken Aufgabenbereich und im Editor ist pro Aufgabe sichtbar, ob die Prüfung `lokal ✓`, `KI ✓`, `prüft …`, `wartet` oder `Fehler` ist.
+- Lokale Kandidaten bleiben während einer Rate-Limit-Wartezeit sichtbar.
+
+Damit bedeutet ein Groq-Minutenlimit nur noch eine Wartezeit. Spätere Aufgaben werden nicht still übersprungen.
