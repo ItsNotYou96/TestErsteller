@@ -3,7 +3,7 @@ import { isAdminRequest } from "@/lib/adminAuth";
 import { addDuplicateCandidates } from "@/lib/duplicateCheck";
 import { draftsFromSources, parseUploadedFile, type ParsedSource } from "@/lib/importParsing";
 import { llmConfigured } from "@/lib/llmAnalysis";
-import { likelyBrokenPdfMath, repairTaskMathWithGroq, visionOcrConfigured, visionOcrModel } from "@/lib/pdfVisionOcr";
+import { likelyBrokenPdfMath, visionOcrConfigured } from "@/lib/pdfVisionOcr";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -36,14 +36,15 @@ export async function POST(request: NextRequest) {
       }, { status: 422 });
     }
 
-    // Visual analysis never determines task boundaries. It only receives already segmented task
-    // text and is allowed to repair mathematical notation inside that immutable task.
+    // Visual math repair is queued in the browser after segmentation. The import request only
+    // marks suspicious PDF tasks. This keeps the initial Vercel function short and, more
+    // importantly, makes rejected/rate-limited Vision work visible instead of silently falling
+    // back to broken PDF text.
     if (repairMathVisually) {
       if (!visionOcrConfigured()) warnings.push("Mathematik visuell korrigieren wurde gewählt, aber GROQ_API_KEY ist nicht gesetzt.");
       else {
         const sourceByName = new Map(sources.map((source) => [source.name, source]));
-        let repaired = 0;
-        let skipped = 0;
+        let needed = 0;
         for (const draft of drafts) {
           const source = sourceByName.get(draft.sourceFile);
           if (!source || source.mimeType !== "application/pdf" || !draft.sourcePages?.length) continue;
@@ -52,18 +53,15 @@ export async function POST(request: NextRequest) {
             .filter((block) => blockIds.has(block.id) && block.kind !== "page-break" && block.kind !== "image")
             .map((block) => block.text)
             .join("\n");
-          if (!likelyBrokenPdfMath(`${rawPdfEvidence}\n${draft.questionText}`)) { skipped++; continue; }
-          try {
-            draft.questionText = await repairTaskMathWithGroq(source.bytes, draft.questionText, draft.sourcePages, rawPdfEvidence);
-            draft.mathRepair = "visual";
-            repaired++;
-          } catch (error) {
-            draft.mathRepair = "rejected";
-            warnings.push(`${draft.sourceFile} · ${draft.title}: Visuelle Mathekorrektur nicht übernommen. ${error instanceof Error ? error.message : String(error)}`);
+          if (likelyBrokenPdfMath(`${rawPdfEvidence}\n${draft.questionText}`)) {
+            draft.mathRepair = "needed";
+            draft.mathRepairNote = "Beschädigte PDF-Mathematik erkannt; visuelle Reparatur steht aus.";
+            needed++;
+          } else {
+            draft.mathRepair = "none";
           }
         }
-        if (repaired) warnings.push(`${repaired} Aufgabe(n) mit erkennbar beschädigter mathematischer Textschicht wurden gezielt mit ${visionOcrModel()} korrigiert. Die Aufgabengrenzen und Zahlen stammen weiterhin aus dem Originaldokument.`);
-        if (!repaired && skipped) warnings.push("Die visuelle Mathekorrektur war aktiviert, aber bei den erkannten Aufgaben wurden keine typischen Schäden der PDF-Textschicht gefunden.");
+        if (needed) warnings.push(`${needed} Aufgabe(n) enthalten wahrscheinlich beschädigte PDF-Mathematik und werden im nächsten Schritt visuell nachgelesen.`);
       }
     }
 

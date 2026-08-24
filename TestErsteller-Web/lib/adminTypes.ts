@@ -35,7 +35,8 @@ export interface ImportDraft {
   sourceBlockIds?: string[];
   segmentationMode?: "deterministic" | "llm";
   segmentationConfidence?: number;
-  mathRepair?: "none" | "visual" | "rejected";
+  mathRepair?: "none" | "needed" | "checking" | "visual" | "rejected" | "failed";
+  mathRepairNote?: string;
   duplicate?: DuplicateCandidate;
   duplicates?: DuplicateCandidate[];
   duplicatePool?: DuplicateCandidate[];

@@ -1,4 +1,4 @@
-# Validierung v3.3
+# Validierung v3.4
 
 ## Regression: Aufgabengrenzen
 
@@ -84,3 +84,19 @@ Die lineare PDF-Textschicht kann dieselben Stellen als nackte Zahlenfolgen liefe
 Zusätzlich wird `pdf-parse.getText()` nun mit `itemJoiner: " "` aufgerufen, damit getrennte Textobjekte ihre Grenze behalten und die Sicherheitsvalidierung z. B. eine gemischte Zahl nicht als vermeintliche `52` missversteht.
 
 Die visuelle Reparatur validiert Teilaufgabenlabels und den Zahlen-Multiset nun pro Teilaufgabe. Eine Korrektur darf Bruchlayout rekonstruieren, aber weder Zahlen zwischen Teilaufgaben verschieben noch neue Zahlen hinzufügen.
+
+
+## v3.4 – Regression: gestapelte Brüche / doppelte Teilaufgabenlabels
+
+Für die problematische Aufgabe 3 aus `Gleichungen-und-Terme (1)(1).pdf` wurde die zerfallene Textspur als Fixture verwendet. Die Teilaufgabenfolge wird als **12 Positionen** erkannt: `a), b), c), d), e), e), f), g), h), i), j), k)`. Das doppelte `e)` bleibt absichtlich erhalten.
+
+Die vier visuell problematischen Positionen haben im Originalbild folgende Mathematik:
+
+- Position 4 (`d)`): `\frac{3}{4}x+4=25`
+- Position 5 (erstes `e)`): `\frac{1}{2}x-3=-5\frac{1}{2}`
+- Position 6 (zweites `e)`): `\frac{4}{5}-\frac{3}{20}y=\frac{3}{4}`
+- Position 7 (`f)`): `\frac{3}{4}=\frac{3}{2}-\frac{3}{8}y`
+
+Die neue Vision-Schnittstelle verlangt exakt 12 `parts` nach Ordinalzahl und gibt keine Labels zurück. Das Programm setzt die Original-Labels anschließend selbst wieder ein. Die Zahlenvalidierung erfolgt pro Position; damit sind reine Layout-Umsortierungen von Zähler/Nenner erlaubt, Zahlenänderungen zwischen Teilaufgaben dagegen nicht.
+
+Die Dateien `pdfVisionOcr.ts`, `adminTypes.ts`, `app/api/admin/import/route.ts`, `app/api/admin/repair-math/route.ts` und `app/admin/page.tsx` wurden mit TypeScript `transpileModule` syntaktisch geprüft: **0 Diagnosen**.

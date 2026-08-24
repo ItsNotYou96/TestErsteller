@@ -726,3 +726,10 @@ h2 { margin: 0; font-size: 15px; font-weight: 650; }
 .adminNavLink { display: inline-flex; align-items: center; height: 30px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 4px; background: #f8f9fb; color: #475467; text-decoration: none; font-size: 10px; font-weight: 700; }
 .adminNavLink:hover { background: #eef1f5; }
 
+
+.adminMathRepairStatus { margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 9px; border: 1px solid #e3d6a4; border-radius: 5px; background: #fffbeb; color: #7a5a13; font-size: 9px; }
+.adminMathRepairStatus > div { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.adminMathRepairStatus > span { text-align: right; color: inherit; opacity: .9; }
+.adminMathRepairStatus.visual { border-color: #b9dfc7; background: #f0faf4; color: #17673b; }
+.adminMathRepairStatus.checking { border-color: #bfd2ee; background: #f2f7ff; color: #245b9b; }
+.adminMathRepairStatus.rejected, .adminMathRepairStatus.failed { border-color: #e7aaaa; background: #fff1f1; color: #8e2626; }

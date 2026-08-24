@@ -171,6 +171,66 @@ export default function AdminPage() {
       setWarnings(data.warnings || []);
       setSourceSummary(data.sourceSummary || []);
 
+      // Visual PDF math repair is a separate browser-side queue. It runs only for tasks that
+      // the deterministic PDF analysis marked as suspicious. Rate limits are waited out and
+      // failures remain visible on the exact task instead of silently keeping broken text.
+      if (useVisionOcr && working.some((draft) => draft.mathRepair === "needed")) {
+        const mathWarnings: string[] = [];
+        const repairIndexes = working.map((draft, index) => draft.mathRepair === "needed" ? index : -1).filter((index) => index >= 0);
+        for (let queueIndex = 0; queueIndex < repairIndexes.length; queueIndex++) {
+          const i = repairIndexes[queueIndex];
+          const sourceFile = files.find((file) => file.name === working[i].sourceFile);
+          if (!sourceFile) {
+            working = working.map((draft, index) => index === i ? { ...draft, mathRepair: "failed", mathRepairNote: "Quelldatei für die visuelle Reparatur nicht mehr verfügbar." } : draft);
+            setDrafts([...working]);
+            mathWarnings.push(`${working[i].title}: Quelldatei nicht gefunden.`);
+            continue;
+          }
+
+          working = working.map((draft, index) => index === i ? { ...draft, mathRepair: "checking", mathRepairNote: "Mathematische Anordnung wird im PDF-Bild nachgelesen …" } : draft);
+          setDrafts([...working]);
+
+          while (true) {
+            setMessage(`Mathematik ${queueIndex + 1}/${repairIndexes.length}: ${working[i].title}`);
+            const repairForm = new FormData();
+            repairForm.append("file", sourceFile);
+            repairForm.append("questionText", working[i].questionText);
+            repairForm.append("pages", JSON.stringify(working[i].sourcePages || []));
+            const rr = await fetch("/api/admin/repair-math", { method: "POST", body: repairForm });
+            const result = await rr.json().catch(() => ({}));
+
+            if (rr.ok && typeof result.correctedText === "string" && result.correctedText.trim()) {
+              working = working.map((draft, index) => index === i ? {
+                ...draft,
+                questionText: result.correctedText,
+                mathRepair: "visual",
+                mathRepairNote: `Mathematische Schreibweise visuell mit ${result.model || "Groq Vision"} rekonstruiert.`,
+              } : draft);
+              setDrafts([...working]);
+              break;
+            }
+
+            if (rr.status === 429) {
+              const retrySeconds = Math.max(2, Number(result.retryAfterSeconds) || parseResetSeconds(result.resetTokens) || 8);
+              working = working.map((draft, index) => index === i ? { ...draft, mathRepair: "needed", mathRepairNote: `Groq-Limit erreicht; Fortsetzung in ${Math.ceil(retrySeconds)} s.` } : draft);
+              setDrafts([...working]);
+              setMessage(`Mathematik ${queueIndex + 1}/${repairIndexes.length}: Groq-Limit erreicht · Fortsetzung in ${Math.ceil(retrySeconds)} s …`);
+              await sleep((retrySeconds + 0.5) * 1000);
+              working = working.map((draft, index) => index === i ? { ...draft, mathRepair: "checking", mathRepairNote: "Mathematische Anordnung wird im PDF-Bild nachgelesen …" } : draft);
+              setDrafts([...working]);
+              continue;
+            }
+
+            const reason = result.error || `HTTP ${rr.status}`;
+            working = working.map((draft, index) => index === i ? { ...draft, mathRepair: "rejected", mathRepairNote: reason } : draft);
+            setDrafts([...working]);
+            mathWarnings.push(`${working[i].title}: ${reason}`);
+            break;
+          }
+        }
+        if (mathWarnings.length) setWarnings((prev) => [...prev, `Visuelle Mathekorrektur: ${mathWarnings.join(" | ")}`]);
+      }
+
       if (data.llmRequested && working.length) {
         const llmWarnings: string[] = [];
         for (let i = 0; i < working.length; i++) {
@@ -472,7 +532,7 @@ export default function AdminPage() {
               {drafts.map((draft, index) => (
                 <button key={draft.id} className={`adminDraftCard ${selected?.id === draft.id ? "active" : ""} ${!draft.include ? "excluded" : ""}`} onClick={() => setSelectedId(draft.id)}>
                   <span className="adminDraftIndex">{index + 1}</span>
-                  <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P.{draft.pointsSource === "heuristic" ? " (geschätzt)" : ""} · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}{draft.segmentationConfidence ? ` · Struktur ${Math.round(draft.segmentationConfidence * 100)}%` : ""}{draft.mathRepair === "visual" ? " · Mathe visuell korrigiert" : draft.mathRepair === "rejected" ? " · Mathe-Korrektur verworfen" : ""}</small></span>
+                  <span className="adminDraftText"><strong>{draft.title}</strong><small>{draft.classLevel} · {draft.topic} · {draft.competence}</small><small>{draft.pointsRaw || "?"} P.{draft.pointsSource === "heuristic" ? " (geschätzt)" : ""} · {draft.estimatedTime || "?"} min · {draft.analysisMode === "llm" ? "KI" : "Heuristik"}{draft.segmentationConfidence ? ` · Struktur ${Math.round(draft.segmentationConfidence * 100)}%` : ""}{draft.mathRepair === "visual" ? " · Mathe visuell korrigiert" : draft.mathRepair === "checking" ? " · Mathe wird geprüft" : draft.mathRepair === "needed" ? " · Mathe-Reparatur wartet" : draft.mathRepair === "rejected" || draft.mathRepair === "failed" ? " · Mathe-Korrektur fehlgeschlagen" : ""}</small></span>
                   <span className="adminDraftBadges">
                     <em className={`duplicateStatus ${draft.duplicateCheckStatus || "pending"}`}>{duplicateStatusLabel(draft)}</em>
                     {draft.duplicate && <em className={draft.duplicate.score >= .96 ? "danger" : "warn"}>{Math.round(draft.duplicate.score * 100)}% ähnlich</em>}
@@ -488,6 +548,16 @@ export default function AdminPage() {
                   <div><span className="eyebrow">{selected.analysisMode === "llm" ? "KI-VORSCHLAG" : "HEURISTISCHER VORSCHLAG"}</span><h2>{selected.title || "Aufgabe"}</h2><p>Quelle: {selected.sourceFile}</p></div>
                   <label className={`adminIncludeToggle ${selected.include ? "on" : ""}`}><input type="checkbox" checked={selected.include} onChange={(e) => patchDraft(selected.id, { include: e.target.checked })} />{selected.include ? "Wird importiert" : "Verworfen"}</label>
                 </div>
+
+                {selected.mathRepair && selected.mathRepair !== "none" && (
+                  <section className={`adminMathRepairStatus ${selected.mathRepair}`}>
+                    <div>
+                      {selected.mathRepair === "checking" ? <Loader2 className="spin" size={15} /> : selected.mathRepair === "visual" ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
+                      <strong>{selected.mathRepair === "visual" ? "Mathematik visuell korrigiert" : selected.mathRepair === "checking" ? "Mathematik wird visuell geprüft" : selected.mathRepair === "needed" ? "Visuelle Mathekorrektur wartet" : "Visuelle Mathekorrektur nicht übernommen"}</strong>
+                    </div>
+                    <span>{selected.mathRepairNote || ""}</span>
+                  </section>
+                )}
 
                 <section className={`adminDuplicateCheckStatus ${selected.duplicateCheckStatus || "pending"}`}>
                   <div>

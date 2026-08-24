@@ -1,4 +1,4 @@
-# TestErsteller Web v3.3 – blockbasierter Importer
+# TestErsteller Web v3.4 – blockbasierter Importer
 
 Der Admin-Importer wurde in v3.0 neu aufgebaut. Er versucht nicht mehr, jedes neue Dokumentformat mit zusätzlichen Spezial-Regeln/Regexen zu reparieren.
 
@@ -77,3 +77,12 @@ Bei PDF-Mathematik wird jetzt zwischen **Aufgabenstruktur** und **mathematischem
 - Die Option „Mathematik visuell korrigieren“ ist standardmäßig aktiviert, läuft aber weiterhin nur für Aufgaben mit verdächtigen PDF-Mathe-Signalen. Sie kann im Adminbereich deaktiviert werden.
 
 Die visuelle Korrektur ändert weiterhin niemals Aufgabengrenzen oder normalen Aufgabentext.
+
+
+## v3.4 – Bruchreparatur pro Teilaufgabe und sichtbare Vision-Queue
+
+Die visuelle PDF-Mathekorrektur läuft nicht mehr versteckt innerhalb des initialen Import-Requests. Verdächtige Aufgaben werden zunächst nur markiert und danach im Browser nacheinander über `/api/admin/repair-math` verarbeitet. Ein Rate-Limit führt zu sichtbarem Warten/Retry; eine verworfene Korrektur bleibt mit konkreter Fehlermeldung an der Aufgabe sichtbar.
+
+Bei Aufgaben mit mehreren Teilaufgaben darf Qwen die Buchstaben/Labels nicht mehr neu transkribieren. Der Parser behält die Originalfolge (auch doppelte Labels) unverändert und Qwen liefert ausschließlich den Inhalt der 1., 2., 3. ... Teilaufgabe in visueller Reihenfolge. Das verhindert, dass offensichtliche Tippfehler im Quelldokument (z. B. zweimal `e)`) vom Modell "korrigiert" werden und dadurch die gesamte mathematische Reparatur verworfen wird.
+
+Jede zurückgegebene Teilaufgabe wird separat auf ihren Zahlenbestand und – soweit vorhanden – ihren normalen Wortlaut geprüft. Erst danach werden die visuell rekonstruierten Inhalte wieder hinter die unveränderten Original-Labels gesetzt.
