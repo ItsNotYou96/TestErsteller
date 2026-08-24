@@ -1,6 +1,6 @@
 import type { Competence } from "./types";
 
-export const LOCAL_RELEVANCE_THRESHOLD = 0.34;
+export const LOCAL_RELEVANCE_THRESHOLD = 0.50;
 
 export interface DuplicateCandidate {
   id: string;

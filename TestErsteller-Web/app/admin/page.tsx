@@ -263,15 +263,18 @@ export default function AdminPage() {
         if (llmWarnings.length) setWarnings((prev) => [...prev, `Einige Aufgaben konnten nicht per Groq verfeinert werden: ${llmWarnings.join(" | ")}`]);
       }
 
-      // Duplicate checking is deliberately a second queue. Every task is already compared locally
-      // during /import. Only ambiguous local matches need Groq. A 429 is never treated as "done":
-      // this exact task waits and retries until the rate-limit window opens again.
+      // Duplicate checking is a separate, batched queue. Local retrieval has already searched the
+      // whole class. Only genuinely plausible candidates reach Groq, and up to four tasks share one
+      // semantic request so the long comparison instructions are not paid repeatedly per task.
       if (data.llmRequested && working.length) {
         const duplicateWarnings: string[] = [];
-        for (let i = 0; i < working.length; i++) {
-          if (!working[i].duplicateNeedsRerank) continue;
+        const pendingIds = working.filter((draft) => draft.duplicateNeedsRerank).map((draft) => draft.id);
+        const batches: string[][] = [];
+        for (let offset = 0; offset < pendingIds.length; offset += 4) batches.push(pendingIds.slice(offset, offset + 4));
 
-          working = working.map((draft, index) => index === i ? {
+        for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+          const ids = new Set(batches[batchIndex]);
+          working = working.map((draft) => ids.has(draft.id) ? {
             ...draft,
             duplicateCheckStatus: "checking",
             duplicateCheckNote: "Semantische Ähnlichkeitsprüfung läuft …",
@@ -279,31 +282,33 @@ export default function AdminPage() {
           setDrafts([...working]);
 
           while (true) {
-            setMessage(`Ähnlichkeit ${i + 1}/${working.length}: ${working[i].title}`);
-            const rr = await fetch("/api/admin/check-duplicate", {
+            const batchDrafts = working.filter((draft) => ids.has(draft.id));
+            setMessage(`Ähnlichkeit: Paket ${batchIndex + 1}/${batches.length} · ${batchDrafts.length} Aufgabe${batchDrafts.length === 1 ? "" : "n"}`);
+            const rr = await fetch("/api/admin/check-duplicates-batch", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ draft: working[i] }),
+              body: JSON.stringify({ drafts: batchDrafts }),
             });
             const result = await rr.json().catch(() => ({}));
 
-            if (rr.ok && result.draft) {
-              working = working.map((draft, index) => index === i ? result.draft : draft);
+            if (rr.ok && Array.isArray(result.drafts)) {
+              const byId = new Map<string, ImportDraft>(result.drafts.map((draft: ImportDraft) => [draft.id, draft]));
+              working = working.map((draft) => byId.get(draft.id) || draft);
               setDrafts([...working]);
               break;
             }
 
             if (rr.status === 429) {
               const retrySeconds = Math.max(2, Number(result.retryAfterSeconds) || parseResetSeconds(result.resetTokens) || 8);
-              working = working.map((draft, index) => index === i ? {
+              working = working.map((draft) => ids.has(draft.id) ? {
                 ...draft,
                 duplicateCheckStatus: "pending",
                 duplicateCheckNote: `Groq-Limit erreicht; automatische Fortsetzung in ${Math.ceil(retrySeconds)} s.`,
               } : draft);
               setDrafts([...working]);
-              setMessage(`Ähnlichkeit ${i + 1}/${working.length}: Groq-Limit erreicht · Fortsetzung automatisch in ${Math.ceil(retrySeconds)} s …`);
+              setMessage(`Ähnlichkeit: Groq-Limit erreicht · Paket ${batchIndex + 1}/${batches.length} läuft in ${Math.ceil(retrySeconds)} s weiter …`);
               await sleep((retrySeconds + 0.5) * 1000);
-              working = working.map((draft, index) => index === i ? {
+              working = working.map((draft) => ids.has(draft.id) ? {
                 ...draft,
                 duplicateCheckStatus: "checking",
                 duplicateCheckNote: "Semantische Ähnlichkeitsprüfung läuft …",
@@ -312,13 +317,14 @@ export default function AdminPage() {
               continue;
             }
 
-            working = working.map((draft, index) => index === i ? {
+            const reason = result.error || `Ähnlichkeitsprüfung fehlgeschlagen (HTTP ${rr.status}).`;
+            working = working.map((draft) => ids.has(draft.id) ? {
               ...draft,
               duplicateCheckStatus: "failed",
-              duplicateCheckNote: result.error || `Ähnlichkeitsprüfung fehlgeschlagen (HTTP ${rr.status}).`,
+              duplicateCheckNote: reason,
             } : draft);
             setDrafts([...working]);
-            duplicateWarnings.push(`${working[i].title}: ${result.error || `HTTP ${rr.status}`}`);
+            duplicateWarnings.push(`Paket ${batchIndex + 1}: ${reason}`);
             break;
           }
         }

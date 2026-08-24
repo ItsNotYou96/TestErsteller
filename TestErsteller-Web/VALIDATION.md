@@ -1,3 +1,13 @@
+# v3.9 Regression
+
+- Nutzerbeispiel: sprachliche Termübersetzung vs. Johannisbeeren-Sachsituation → lokaler Retrievalwert ca. 21 %, unter Groq-Trigger, kein Ähnlichkeitstreffer.
+- Sprachlich anders formulierte Varianten derselben Termübersetzungs-Kompetenz → ca. 83 %, werden semantisch geprüft.
+- Vorgegebene Gleichung lösen vs. Sachsituation modellieren → ca. 21 %, wird ausgesiebt.
+- Zwei Varianten „Terme vereinfachen“ → ca. 96 %, sicherer Kandidat.
+- Quadrat/Flächeninhalt vs. Aussagen über negative Zahlen → ca. 4 %.
+- Groq-Batch: max. 4 neue Aufgaben pro Request, max. 2 Kandidaten pro Aufgabe, Texte auf 700/350 Zeichen begrenzt.
+- Nach Groq werden nur `same_skill` (>=72 %) und `near_duplicate` (>=88 %) als sichtbare Ähnlichkeit geführt; `related` ist bewusst kein Duplikat-Hinweis.
+
 # Validierung v3.5
 
 ## Regression: Aufgabengrenzen

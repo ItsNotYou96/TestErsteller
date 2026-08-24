@@ -1,3 +1,9 @@
+# v3.9 – präzisere und sparsamere Ähnlichkeitsanalyse
+
+Die lokale Stufe ist wieder ein strenger Retrieval-Filter statt eines möglichst breiten Netzes. Sie klassifiziert Aufgaben nach didaktischer Familie und Repräsentationsmodus (z. B. sprachliche Termübersetzung, Sachsituations-Modellierung, Termvereinfachung, Gleichungslösen). Oberflächlich ähnliche, didaktisch aber verschiedene Aufgaben werden vor Groq ausgesiebt. Insbesondere gilt: „mathematische Aussage in einen Term übersetzen“ und „Sachsituation durch einen Term modellieren“ sind verschiedene Aufgabentypen.
+
+Groq wird nur noch aufgerufen, wenn der beste lokale Kandidat mindestens 38 % Retrieval-Evidenz erreicht. Pro neuer Aufgabe werden höchstens zwei Kandidaten an die semantische Prüfung geschickt. Bis zu vier neue Aufgaben werden in **einem** Groq-Request gebündelt, damit die langen Bewertungsinstruktionen nicht für jede Aufgabe erneut Tokens verbrauchen. Semantisch bloß `related` eingestufte Aufgaben werden nicht mehr als Ähnlichkeitstreffer angezeigt; sichtbar sind nur `same_skill` und `near_duplicate`.
+
 # TestErsteller Web v3.7 – blockbasierter Importer
 
 Der Admin-Importer wurde in v3.0 neu aufgebaut. Er versucht nicht mehr, jedes neue Dokumentformat mit zusätzlichen Spezial-Regeln/Regexen zu reparieren.
