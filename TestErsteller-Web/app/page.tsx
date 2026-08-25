@@ -166,29 +166,55 @@ export default function Home() {
     competences.map((c) => [c, selectedTasks.filter((t) => t.competence === c).reduce((sum, task) => sum + task.maxPoints, 0)]),
   ) as Record<Competence, number>;
 
+  function safeDownloadName(value: string) {
+    return (value || "Klassenarbeit").replace(/[\\/:*?"<>|]+/g, "-");
+  }
+
+  function downloadWordFile(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function requestWordExport(kind: "test" | "expectation") {
+    const r = await fetch("/api/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tasks: selectedTasks, metadata: meta, kind }),
+    });
+    if (!r.ok) {
+      let message = "Export fehlgeschlagen.";
+      try {
+        const data = await r.json();
+        message = data.error || message;
+      } catch {
+        // Falls der Server keine JSON-Fehlermeldung geliefert hat, bleibt die Standardmeldung bestehen.
+      }
+      throw new Error(message);
+    }
+    return r.blob();
+  }
+
   async function exportDocs() {
     setShowOrderDialog(false);
     setShowDialog(false);
     setMessage("Word-Dateien werden erstellt …");
     try {
-      const payload = { tasks: selectedTasks, metadata: meta };
-      const r = await fetch("/api/export", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!r.ok) {
-        const data = await r.json();
-        throw new Error(data.error || "Export fehlgeschlagen.");
-      }
-      const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${meta.title || "Klassenarbeit"}.zip`;
-      a.click();
-      URL.revokeObjectURL(url);
-      setMessage("Test und Erwartungshorizont wurden erstellt.");
+      const [testBlob, expectationBlob] = await Promise.all([
+        requestWordExport("test"),
+        requestWordExport("expectation"),
+      ]);
+
+      const safe = safeDownloadName(meta.title || "Klassenarbeit");
+      downloadWordFile(testBlob, `${safe}.docx`);
+      downloadWordFile(expectationBlob, `${safe}_Erwartung.docx`);
+      setMessage("Test und Erwartungshorizont wurden als einzelne Word-Dateien erstellt.");
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
     }

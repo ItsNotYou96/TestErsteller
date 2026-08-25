@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import JSZip from "jszip";
 import {
   AlignmentType,
   BorderStyle,
@@ -28,7 +27,8 @@ import type { TaskItem, TestMetadata } from "@/lib/types";
 
 export const runtime = "nodejs";
 
-type ExportPayload = { tasks: TaskItem[]; metadata: TestMetadata };
+type ExportKind = "test" | "expectation";
+type ExportPayload = { tasks: TaskItem[]; metadata: TestMetadata; kind?: ExportKind };
 
 const LEGACY_ASSETS: Record<string, string> = {
   "fro_icon.png": "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",
@@ -597,22 +597,19 @@ export async function POST(request: Request) {
     const payload = (await request.json()) as ExportPayload;
     if (!payload.tasks?.length) return NextResponse.json({ error: "Keine Aufgaben ausgewählt." }, { status: 400 });
 
-    const [test, expectation] = await Promise.all([
-      createTest(payload.tasks, payload.metadata),
-      createExpectation(payload.tasks, payload.metadata),
-    ]);
-
-    const zip = new JSZip();
-    const safe = (payload.metadata.title || "Klassenarbeit").replace(/[\\/:*?"<>|]+/g, "-");
-    zip.file(`${safe}.docx`, test);
-    zip.file(`${safe}_Erwartung.docx`, expectation);
-    const out = await zip.generateAsync({ type: "uint8array" });
-    const body = Uint8Array.from(out).buffer;
+    const kind: ExportKind = payload.kind === "expectation" ? "expectation" : "test";
+    const safe = (payload.metadata.title || "Klassenarbeit").replace(/[\/:*?"<>|]+/g, "-");
+    const filename = kind === "expectation" ? `${safe}_Erwartung.docx` : `${safe}.docx`;
+    const file = kind === "expectation"
+      ? await createExpectation(payload.tasks, payload.metadata)
+      : await createTest(payload.tasks, payload.metadata);
+    const body = Uint8Array.from(file).buffer;
 
     return new NextResponse(body, {
       headers: {
-        "Content-Type": "application/zip",
-        "Content-Disposition": `attachment; filename="${encodeURIComponent(safe)}.zip"`,
+        "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+        "Cache-Control": "no-store",
       },
     });
   } catch (error) {
